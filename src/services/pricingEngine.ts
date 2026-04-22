@@ -62,7 +62,7 @@ function hhmmToMinutes(s?: string | null) {
 
 async function pricingRulesForNow(
   outletId: string,
-  channel: string,
+  channel: string, 
   when: Date
 ): Promise<DiscountLine[]> {
   const rules = await PricingRule.find({ outletId, active: true });
