@@ -54,7 +54,7 @@ export type PricingResult = {
   triggeredPromotionIds: string[];
 };
 
-function hhmmToMinutes(s?: string) {
+function hhmmToMinutes(s?: string | null) {
   if (!s) return null;
   const [h, m] = s.split(":").map(Number);
   return h * 60 + m;

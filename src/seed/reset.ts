@@ -7,14 +7,18 @@ import { ensureTestUsers } from "./ensureUsers";
 async function main() {
   const uri = await connectDB();
   console.log(`[reset] connected to ${uri.split("@")[1] ?? uri}`);
+  const db = mongoose.connection.db;
+  if (!db) {
+    throw new Error("MongoDB connection database handle is unavailable");
+  }
 
   const name = mongoose.connection.name;
-  const collections = await mongoose.connection.db.listCollections().toArray();
+  const collections = await db.listCollections().toArray();
   console.log(
     `[reset] dropping ${collections.length} collections in "${name}"…`
   );
   for (const c of collections) {
-    await mongoose.connection.db.dropCollection(c.name);
+    await db.dropCollection(c.name);
     console.log(`  · dropped ${c.name}`);
   }
 
@@ -23,9 +27,7 @@ async function main() {
   await ensureTestUsers();
 
   // Summary
-  const out = await mongoose.connection.db
-    .listCollections()
-    .toArray();
+  const out = await db.listCollections().toArray();
   console.log(`[reset] final collections (${out.length}):`);
   for (const c of out) {
     const count = await mongoose.connection
