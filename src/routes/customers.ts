@@ -2,10 +2,13 @@ import { Router } from "express";
 import { Customer } from "../models/Customer";
 import { Review } from "../models/Review";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, excludeRoles } from "../middleware/auth";
 
 const r = Router();
 r.use(authMiddleware);
+// Customers carry phone/email PII — riders never need this; their delivery
+// already has the customer name + phone denormalised onto the order.
+r.use(excludeRoles("rider"));
 
 r.get(
   "/",

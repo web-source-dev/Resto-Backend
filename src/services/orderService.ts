@@ -12,6 +12,7 @@ import { User } from "../models/User";
 import { Customer } from "../models/Customer";
 import { priceOrder, commitPromotionUsage } from "./pricingEngine";
 import { dispatchWebhook } from "./webhookDispatcher";
+import { audit } from "./audit";
 
 // Loyalty config — keeping it simple for now, could be per-outlet settings later.
 const POINTS_PER_RUPEE = 0.1; // 10% back as points · 1 point = Rs 1 redeemable
@@ -60,7 +61,7 @@ function applyItemEta(
 function syncOrderEtaFromItems(order: any) {
   let maxTs = 0;
   for (const item of order.items as any[]) {
-    if (item.status === "Pending" || item.status === "Ready") continue;
+    if (item.status === "Pending" || item.status === "Ready" || item.status === "Cancelled") continue;
     if (!item.eta) continue;
     const t = new Date(item.eta).getTime();
     if (!Number.isFinite(t)) continue;
@@ -68,6 +69,152 @@ function syncOrderEtaFromItems(order: any) {
   }
   if (maxTs > 0) order.eta = new Date(maxTs);
   else order.eta = undefined;
+}
+
+/**
+ * Naive total recompute — mirrors the inline formula already used by the
+ * QR addendum path so behaviour stays identical. Cancelled items are
+ * excluded from subtotal so refunds don't carry tax/service. Coupon
+ * discounts are intentionally NOT re-applied here (matches existing qr.ts
+ * behaviour; full repricing on every line edit is a separate concern).
+ */
+function recomputeOrderTotals(order: any, outlet: any) {
+  const subtotal = (order.items as any[])
+    .filter((i) => i.status !== "Cancelled")
+    .reduce((s, x) => s + (x.price ?? 0) * (x.qty ?? 0), 0);
+  const taxRate = outlet?.taxRate ?? 0;
+  const serviceRate = outlet?.serviceRate ?? 0;
+  order.subtotal = subtotal;
+  order.tax = Math.round(subtotal * taxRate);
+  order.service = Math.round(subtotal * serviceRate);
+  order.total = order.subtotal + order.tax + order.service;
+}
+
+/**
+ * Pre-flight stock check for a batch of items about to be queued. Walks
+ * each menu item's recipe BOM and asserts every ingredient has enough
+ * stock for the requested qty. Throws 409 with the first short ingredient
+ * named, so callers don't half-deduct then fail. Items with no recipe
+ * (e.g. pure-resale beverages) skip the check.
+ */
+async function assertItemsInStock(
+  menuMap: Map<string, any>,
+  items: { menuItemId: any; qty: number; name?: string }[]
+) {
+  // Aggregate required qty per ingredient across all items in the batch so
+  // two lines of the same dish don't each pass the check independently.
+  const required = new Map<string, { needed: number; itemName: string }>();
+  for (const it of items) {
+    const m: any = menuMap.get(String(it.menuItemId));
+    if (!m?.recipe?.length) continue;
+    for (const r of m.recipe) {
+      const key = String(r.ingredientId);
+      const prev = required.get(key);
+      const needed = (prev?.needed ?? 0) + Number(r.qty) * Number(it.qty);
+      required.set(key, { needed, itemName: it.name ?? m.name });
+    }
+  }
+  if (required.size === 0) return;
+  const ings = await Ingredient.find({ _id: { $in: [...required.keys()] } });
+  for (const ing of ings as any[]) {
+    const r = required.get(String(ing._id));
+    if (!r) continue;
+    if ((ing.stock ?? 0) < r.needed) {
+      throw Object.assign(
+        new Error(`Out of stock: ${ing.name} (needed for ${r.itemName})`),
+        { status: 409 }
+      );
+    }
+  }
+}
+
+/**
+ * Apply a stock delta atomically with two guarantees:
+ *   1. Result is rounded to 4 decimal places, so float drift from many
+ *      small `$inc` ops doesn't accumulate (the bug behind values like
+ *      "7.149999999999997 kg left").
+ *   2. Result is clamped at 0 — order BOM consumption can't push stock
+ *      negative even when there's no pre-flight check (e.g. `createOrder`).
+ *
+ * Uses Mongo's aggregation-pipeline update so it's a single round-trip and
+ * race-safe.
+ */
+async function applyStockDelta(ingredientId: any, delta: number) {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  await Ingredient.updateOne({ _id: ingredientId }, [
+    {
+      $set: {
+        stock: {
+          $round: [
+            {
+              $max: [
+                0,
+                { $add: [{ $ifNull: ["$stock", 0] }, delta] },
+              ],
+            },
+            4,
+          ],
+        },
+      },
+    },
+  ]);
+  // Keep MenuItem.stockStatus consistent so the QR public menu and KDS
+  // 86-list reflect reality. Cheap because it only touches menus that
+  // reference this ingredient.
+  await recomputeMenuStockStatusForIngredient(ingredientId);
+}
+
+/**
+ * Re-evaluate `stockStatus` (OK / Low / Out) on every MenuItem whose recipe
+ * references this ingredient. Called whenever an ingredient's stock or par
+ * changes via order BOM, supplies usage, wastage, /adjust, PATCH, or PO
+ * receipt. Without this, `MenuItem.stockStatus` is set once at seed time
+ * and silently drifts — items show "Out" while the kitchen has plenty of
+ * the underlying ingredient.
+ */
+export async function recomputeMenuStockStatusForIngredient(ingredientId: any) {
+  const menus = await MenuItem.find({ "recipe.ingredientId": ingredientId });
+  if (menus.length === 0) return;
+  // Collect all ingredient ids any of these menus need so we can batch-fetch.
+  const ingIds = new Set<string>();
+  for (const m of menus as any[]) {
+    for (const r of m.recipe ?? []) ingIds.add(String(r.ingredientId));
+  }
+  const ings = await Ingredient.find({ _id: { $in: [...ingIds] } });
+  const ingMap = new Map(ings.map((i: any) => [String(i._id), i]));
+  for (const m of menus as any[]) {
+    let status: "OK" | "Low" | "Out" = "OK";
+    for (const rec of m.recipe ?? []) {
+      const ing: any = ingMap.get(String(rec.ingredientId));
+      if (!ing) continue;
+      if ((ing.stock ?? 0) <= 0) {
+        status = "Out";
+        break;
+      }
+      if ((ing.stock ?? 0) < (ing.par ?? 0)) status = "Low";
+    }
+    if (m.stockStatus !== status) {
+      await MenuItem.updateOne({ _id: m._id }, { $set: { stockStatus: status } });
+    }
+  }
+}
+
+async function deductRecipeBom(menuMap: Map<string, any>, items: any[]) {
+  for (const item of items) {
+    const m: any = menuMap.get(String(item.menuItemId ?? ""));
+    for (const rec of m?.recipe ?? []) {
+      await applyStockDelta(rec.ingredientId, -(rec.qty * item.qty));
+    }
+  }
+}
+
+async function restoreRecipeBom(menuMap: Map<string, any>, items: any[]) {
+  for (const item of items) {
+    const m: any = menuMap.get(String(item.menuItemId ?? ""));
+    for (const rec of m?.recipe ?? []) {
+      await applyStockDelta(rec.ingredientId, rec.qty * item.qty);
+    }
+  }
 }
 
 function tierForLTV(ltv: number): "Bronze" | "Silver" | "Gold" {
@@ -276,10 +423,7 @@ export async function createOrder(input: {
     const m = menuMap.get(i.menuItemId.toString());
     if (!m?.recipe?.length) continue;
     for (const r of m.recipe) {
-      await Ingredient.updateOne(
-        { _id: r.ingredientId },
-        { $inc: { stock: -(r.qty * i.qty) } }
-      );
+      await applyStockDelta(r.ingredientId, -(r.qty * i.qty));
     }
   }
 
@@ -447,7 +591,7 @@ export async function forwardOrder(id: string, by?: string) {
   return order;
 }
 
-export async function forwardAddendum(id: string, by?: string) {
+export async function forwardAddendum(id: string, by?: string, byName?: string) {
   let order;
   try {
     order = await Order.findById(id);
@@ -459,19 +603,17 @@ export async function forwardAddendum(id: string, by?: string) {
   if (pending.length === 0)
     throw Object.assign(new Error("No pending addendum items"), { status: 409 });
 
-  // Deduct inventory for the newly-approved items via recipe BOM.
   const menuIds = pending.map((i: any) => i.menuItemId?.toString()).filter(Boolean);
   const menus = await MenuItem.find({ _id: { $in: menuIds } });
   const menuMap = new Map(menus.map((m: any) => [m._id.toString(), m]));
-  for (const item of pending as any[]) {
-    const m: any = menuMap.get(item.menuItemId?.toString() ?? "");
-    for (const rec of m?.recipe ?? []) {
-      await Ingredient.updateOne(
-        { _id: rec.ingredientId },
-        { $inc: { stock: -(rec.qty * item.qty) } }
-      );
-    }
-  }
+
+  // Pre-flight stock check across the whole pending batch — if any
+  // ingredient is short, fail before mutating inventory so the receptionist
+  // can either swap the item or 86 it.
+  await assertItemsInStock(menuMap, pending as any);
+
+  // Deduct inventory for the newly-approved items via recipe BOM.
+  await deductRecipeBom(menuMap, pending as any);
 
   // Promote each pending item to Queued so KDS can see it and assign an
   // item-level ETA immediately for customer visibility.
@@ -493,12 +635,43 @@ export async function forwardAddendum(id: string, by?: string) {
     order.readyAt = undefined as any;
     order.servedAt = undefined as any;
   }
+  // QR-initiated orders sit at "Pending" until the receptionist reviews. If a
+  // customer added items BEFORE that review, forwarding the addendum should
+  // also advance the parent — otherwise the customer's tracking page shows
+  // "Pending" while the kitchen is already cooking the lines.
+  if (order.status === "Pending") {
+    order.status = "Queued";
+  }
+  // If the bill was already paid, reopen it. paidAmount stays so the UI can
+  // show balanceDue. Refunded bills aren't reopened — those are closed cases.
+  if (order.paymentStatus === "Paid") {
+    order.paymentStatus = "Pending";
+    order.events.push({
+      status: "Bill reopened (addendum on paid order)",
+      at: new Date(),
+      by: by as any,
+    });
+  }
+  const reopenedPaid = order.paymentStatus === "Pending" && (order.paidAmount ?? 0) > 0;
   order.events.push({
     status: `Addendum forwarded (${pending.length} items)`,
     at: new Date(),
     by: by as any,
   });
   await order.save();
+  await audit({
+    outletId: order.outletId.toString(),
+    userId: by,
+    userName: byName,
+    action: "order.addendum.forward",
+    targetType: "Order",
+    targetId: String(order._id),
+    after: {
+      code: order.code,
+      pendingCount: pending.length,
+      reopenedPaidBill: reopenedPaid,
+    },
+  });
   emit("order:update", order.toJSON(), order.outletId.toString());
   emit("inventory:update", {}, order.outletId.toString());
   await notify({
@@ -509,6 +682,359 @@ export async function forwardAddendum(id: string, by?: string) {
       pending.length === 1 ? "" : "s"
     } forwarded`,
     body: `Kitchen may need to extend ETA${
+      order.tableCode ? ` · ${order.tableCode}` : ""
+    }`,
+    link: "/kds",
+    targetRoles: ["admin", "manager", "kitchen"],
+  });
+  return order;
+}
+
+/**
+ * Staff-initiated addendum: a waiter/receptionist takes a verbal request from
+ * a guest and types it in. Bypasses the receptionist review queue (staff
+ * already approved by entering it) and goes straight to Queued so the KDS
+ * sees it immediately.
+ */
+export async function appendItemsByStaff(args: {
+  orderId: string;
+  items: { menuItemId: string; qty: number; mods?: string[]; note?: string }[];
+  by?: string;
+  byName?: string;
+}) {
+  let order: any;
+  try {
+    order = await Order.findById(args.orderId);
+  } catch {
+    throw Object.assign(new Error("Invalid order id"), { status: 404 });
+  }
+  if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+  if (["Completed", "Cancelled"].includes(order.status))
+    throw Object.assign(new Error("Order is already closed"), { status: 409 });
+  if (!Array.isArray(args.items) || args.items.length === 0)
+    throw Object.assign(new Error("items[] required"), { status: 400 });
+
+  const outlet = await Outlet.findById(order.outletId);
+  const menus = await MenuItem.find({
+    _id: { $in: args.items.map((i) => i.menuItemId) },
+  });
+  const menuMap = new Map(menus.map((m: any) => [m._id.toString(), m]));
+
+  const now = new Date();
+  // Match the existing forwardAddendum policy: if the order's ETA is already
+  // in the future, slot new lines onto that ETA so KDS doesn't promise the
+  // guest something earlier than the dish that's already cooking.
+  const defaultItemEta =
+    order.eta && order.eta > now
+      ? order.eta
+      : new Date(now.getTime() + 12 * 60 * 1000);
+
+  const newItems = args.items.map((i) => {
+    const m: any = menuMap.get(String(i.menuItemId));
+    if (!m)
+      throw Object.assign(new Error(`Unknown menu item ${i.menuItemId}`), {
+        status: 400,
+      });
+    return {
+      menuItemId: m._id,
+      name: m.name,
+      qty: Number(i.qty) || 1,
+      price: m.price,
+      mods: i.mods ?? [],
+      note: i.note,
+      status: "Queued" as const,
+      addendum: true,
+      addedAt: now,
+      eta: defaultItemEta,
+    };
+  });
+
+  // Pre-flight stock check before any mutation.
+  await assertItemsInStock(menuMap, newItems as any);
+
+  // Push, deduct inventory, recompute totals.
+  order.items.push(...(newItems as any));
+  await deductRecipeBom(menuMap, newItems as any);
+  recomputeOrderTotals(order, outlet);
+
+  // Reopen the ticket if the previous round was already done.
+  if (["Ready", "Served"].includes(order.status)) {
+    order.status = "In Progress";
+    order.readyAt = undefined;
+    order.servedAt = undefined;
+  } else if (order.status === "Pending" || order.status === "Queued") {
+    // Leave as-is — these states already include unprepared items.
+  }
+  // Reopen the bill if it was paid; paidAmount stays so balanceDue surfaces.
+  if (order.paymentStatus === "Paid") {
+    order.paymentStatus = "Pending";
+    order.events.push({
+      status: "Bill reopened (addendum on paid order)",
+      at: now,
+      by: args.by as any,
+    });
+  }
+  syncOrderEtaFromItems(order);
+  order.events.push({
+    status: `Items added by staff (${newItems.length})${
+      args.byName ? ` · ${args.byName}` : ""
+    }`,
+    at: now,
+    by: args.by as any,
+  });
+  await order.save();
+
+  emit("order:update", order.toJSON(), order.outletId.toString());
+  emit("inventory:update", {}, order.outletId.toString());
+  await notify({
+    outletId: order.outletId.toString(),
+    type: "order.new",
+    level: "info",
+    title: `${order.code} · ${newItems.length} new item${
+      newItems.length === 1 ? "" : "s"
+    } added`,
+    body: `Kitchen has new items${
+      order.tableCode ? ` · ${order.tableCode}` : ""
+    }`,
+    link: "/kds",
+    targetRoles: ["admin", "manager", "kitchen"],
+  });
+  await audit({
+    outletId: order.outletId.toString(),
+    userId: args.by,
+    userName: args.byName,
+    action: "order.append",
+    targetType: "Order",
+    targetId: String(order._id),
+    after: {
+      code: order.code,
+      added: newItems.map((i: any) => ({ name: i.name, qty: i.qty, price: i.price })),
+      newTotal: order.total,
+    },
+  });
+  return order;
+}
+
+/**
+ * Constants & helpers for non-recipe supply tracking. Reuses the Ingredient
+ * collection (so POs, low-stock alerts, and supplier variance work for free)
+ * and tags rows by category.
+ */
+export const SUPPLY_CATEGORIES = [
+  "Packaging",
+  "Condiments",
+  "Disposables",
+  "Cleaning",
+] as const;
+
+/**
+ * Record ad-hoc supply usage on an order. For predictable per-dish usage
+ * (every burger gets a napkin) put the supply in the menu's recipe BOM
+ * instead — that auto-deducts. This endpoint is for variable cases:
+ * leftover packing, refills, special-request sachets.
+ */
+export async function recordSupplyUsage(args: {
+  orderId: string;
+  supplies: { ingredientId: string; qty: number; reason?: string }[];
+  by?: string;
+  byName?: string;
+}) {
+  let order: any;
+  try {
+    order = await Order.findById(args.orderId);
+  } catch {
+    throw Object.assign(new Error("Invalid order id"), { status: 404 });
+  }
+  if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+  if (!Array.isArray(args.supplies) || args.supplies.length === 0)
+    throw Object.assign(new Error("supplies[] required"), { status: 400 });
+
+  const ids = args.supplies.map((s) => s.ingredientId);
+  const ings = await Ingredient.find({
+    _id: { $in: ids },
+    outletId: order.outletId,
+  });
+  const ingMap = new Map<string, any>(ings.map((i: any) => [String(i._id), i]));
+
+  // Validate everything before mutating any stock.
+  for (const line of args.supplies) {
+    const ing = ingMap.get(String(line.ingredientId));
+    if (!ing)
+      throw Object.assign(new Error(`Unknown supply ${line.ingredientId}`), {
+        status: 400,
+      });
+    const qty = Number(line.qty);
+    if (!Number.isFinite(qty) || qty <= 0)
+      throw Object.assign(new Error(`Invalid qty for ${ing.name}`), {
+        status: 400,
+      });
+    if ((ing.stock ?? 0) < qty)
+      throw Object.assign(
+        new Error(
+          `Out of stock: ${ing.name} (have ${ing.stock ?? 0} ${ing.unit ?? ""}, need ${qty})`
+        ),
+        { status: 409 }
+      );
+  }
+
+  // Deduct + denormalize each line onto the order for cost reporting.
+  const now = new Date();
+  for (const line of args.supplies) {
+    const ing: any = ingMap.get(String(line.ingredientId));
+    const qty = Number(line.qty);
+    await applyStockDelta(ing._id, -qty);
+    order.supplies.push({
+      ingredientId: ing._id,
+      name: ing.name,
+      qty,
+      unit: ing.unit,
+      costPerUnit: ing.costPerUnit ?? 0,
+      at: now,
+      by: args.by as any,
+      byName: args.byName,
+      reason: line.reason,
+    });
+  }
+
+  const summary = args.supplies
+    .map((s) => {
+      const ing = ingMap.get(String(s.ingredientId));
+      return `${s.qty} ${ing?.unit ?? ""} ${ing?.name ?? ""}`.trim();
+    })
+    .join(", ");
+  order.events.push({
+    status: `Supplies used · ${summary}`,
+    at: now,
+    by: args.by as any,
+  });
+  await order.save();
+
+  emit("order:update", order.toJSON(), order.outletId.toString());
+  emit("inventory:update", {}, order.outletId.toString());
+  await audit({
+    outletId: order.outletId.toString(),
+    userId: args.by,
+    userName: args.byName,
+    action: "order.supplies",
+    targetType: "Order",
+    targetId: String(order._id),
+    after: {
+      code: order.code,
+      supplies: args.supplies.map((s) => {
+        const ing: any = ingMap.get(String(s.ingredientId));
+        return {
+          name: ing?.name,
+          qty: s.qty,
+          unit: ing?.unit,
+          costPerUnit: ing?.costPerUnit,
+          reason: s.reason,
+        };
+      }),
+    },
+  });
+  return order;
+}
+
+/**
+ * Cancel a single line item. Cannot cancel a line that is already Ready —
+ * the food's already cooked, so that's a comp/refund, not a cancel. Cancels
+ * an in-flight item: kitchen is told to pull it off the line and inventory
+ * deducted by the BOM is restored.
+ */
+export async function cancelOrderItem(args: {
+  orderId: string;
+  itemId: string;
+  by?: string;
+  byName?: string;
+  reason?: string;
+}) {
+  let order: any;
+  try {
+    order = await Order.findById(args.orderId);
+  } catch {
+    throw Object.assign(new Error("Invalid order id"), { status: 404 });
+  }
+  if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+
+  const item = (order.items as any[]).find(
+    (i) => String(i._id) === String(args.itemId)
+  );
+  if (!item) throw Object.assign(new Error("Item not found"), { status: 404 });
+  if (item.status === "Cancelled")
+    throw Object.assign(new Error("Item already cancelled"), { status: 409 });
+  if (item.status === "Ready")
+    throw Object.assign(
+      new Error("Cannot cancel a Ready item — refund or comp instead"),
+      { status: 409 }
+    );
+  // Once the kitchen has started cooking, ingredients are committed and the
+  // line is on a station. Telling the guest "kitchen's already on it — order
+  // something else if you've changed your mind" is the right move; cancelling
+  // mid-prep wastes food. Only Pending/Queued (kitchen hasn't started) can be
+  // pulled.
+  if (item.status === "In Progress")
+    throw Object.assign(
+      new Error(
+        "Item is already being prepared — ask the guest to add a new item instead"
+      ),
+      { status: 409 }
+    );
+
+  // Pending items haven't deducted yet (review queue). Queued items have.
+  // In Progress is now blocked above so we never reach this for it.
+  const wasDeducted = item.status === "Queued";
+  if (wasDeducted && item.menuItemId) {
+    const m = await MenuItem.findById(item.menuItemId);
+    const menuMap = new Map<string, any>();
+    if (m) menuMap.set(String(m._id), m);
+    await restoreRecipeBom(menuMap, [item]);
+  }
+
+  const now = new Date();
+  item.status = "Cancelled";
+  item.cancelledAt = now;
+  if (args.reason) item.cancelReason = args.reason;
+
+  const outlet = await Outlet.findById(order.outletId);
+  recomputeOrderTotals(order, outlet);
+  syncOrderEtaFromItems(order);
+  order.events.push({
+    status: `Item cancelled · ${item.name}${
+      args.reason ? ` · ${args.reason}` : ""
+    }`,
+    at: now,
+    by: args.by as any,
+  });
+  await order.save();
+
+  emit("order:update", order.toJSON(), order.outletId.toString());
+  if (wasDeducted) emit("inventory:update", {}, order.outletId.toString());
+  await audit({
+    outletId: order.outletId.toString(),
+    userId: args.by,
+    userName: args.byName,
+    action: "order.item.cancel",
+    targetType: "Order",
+    targetId: String(order._id),
+    before: {
+      itemId: String(item._id),
+      name: item.name,
+      qty: item.qty,
+      price: item.price,
+      stockWasDeducted: wasDeducted,
+    },
+    after: {
+      code: order.code,
+      reason: args.reason,
+      newTotal: order.total,
+    },
+  });
+  await notify({
+    outletId: order.outletId.toString(),
+    type: "order.new",
+    level: "warn",
+    title: `${order.code} · item cancelled`,
+    body: `${item.name}${args.reason ? ` · ${args.reason}` : ""}${
       order.tableCode ? ` · ${order.tableCode}` : ""
     }`,
     link: "/kds",
@@ -806,6 +1332,16 @@ export async function deliveryDelivered(
       new Error("Order is not in transit"),
       { status: 409 }
     );
+  // Reject the cash-collected flag on non-COD orders. Without this, a rider
+  // who taps "collected" on a card-prepaid order silently loses the cash —
+  // the server used to ignore the flag (paymentStatus stayed Pending) and
+  // the rider had no signal that anything went wrong.
+  if (opts?.paymentCollected && !order.cashOnDelivery) {
+    throw Object.assign(
+      new Error("paymentCollected is only valid on cash-on-delivery orders"),
+      { status: 400 }
+    );
+  }
   const now = new Date();
   order.status = "Completed";
   order.closedAt = now;
@@ -813,6 +1349,7 @@ export async function deliveryDelivered(
   if (order.cashOnDelivery && opts?.paymentCollected) {
     order.paymentStatus = "Paid";
     order.paymentMethod = "Cash";
+    (order as any).paidAmount = order.total ?? 0;
   }
   order.events.push({
     status: "Delivered",
@@ -851,14 +1388,25 @@ export async function deliveryFailed(
       { status: 409 }
     );
   const now = new Date();
+  const previousRiderName = order.riderName;
+  const previousRiderId = order.riderId;
   order.failureReason = reason;
+  // Release the rider so they can claim their next delivery. Without this,
+  // a failed delivery left `riderId` set and any subsequent `claim` 409'd
+  // with "Rider is already on delivery #X" — rider got stuck until manager
+  // intervened. Roll the order back to Ready so dispatch can reassign.
+  order.riderId = undefined as any;
+  order.riderName = undefined as any;
+  order.assignedAt = undefined as any;
+  order.pickedUpAt = undefined as any;
+  order.status = "Ready";
   order.events.push({
-    status: `Delivery failed · ${reason}`,
+    status: `Delivery failed · ${reason}${
+      previousRiderName ? ` · ${previousRiderName} released` : ""
+    }`,
     at: now,
     by: by as any,
   });
-  // Keep status as-is (Ready or Served) and mark for manual intervention.
-  // Manager can then reassign or cancel.
   await order.save();
   emit("order:update", order.toJSON(), order.outletId.toString());
   await notify({
@@ -867,11 +1415,23 @@ export async function deliveryFailed(
     level: "error",
     title: `${order.code} delivery failed`,
     body: `${reason}${
-      order.riderName ? ` · rider ${order.riderName}` : ""
+      previousRiderName ? ` · rider ${previousRiderName}` : ""
     } · needs resolution`,
     link: "/orders",
     targetRoles: ["admin", "manager", "receptionist"],
   });
+  // Personal note to the now-released rider so they know they're free again.
+  if (previousRiderId) {
+    await notify({
+      outletId: order.outletId.toString(),
+      type: "system",
+      level: "warn",
+      title: `${order.code} marked failed`,
+      body: `You're free to claim a new delivery`,
+      link: "/delivery",
+      targetUserId: String(previousRiderId),
+    });
+  }
   return order;
 }
 
@@ -903,10 +1463,11 @@ export async function transitionOrder(
   id: string,
   to: "In Progress" | "Ready" | "Served" | "Completed" | "Cancelled",
   by?: string,
-  opts?: { etaMinutes?: number }
+  opts?: { etaMinutes?: number; byName?: string }
 ) {
   const order = await Order.findById(id);
   if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+  const fromStatus = order.status;
   if (to === "Served" && order.channel === "Delivery") {
     throw Object.assign(
       new Error(
@@ -991,18 +1552,45 @@ export async function transitionOrder(
   if (to === "Cancelled") {
     await dispatchWebhook(order.outletId.toString(), "order.cancelled", order.toJSON());
   }
+  // Audit only state changes that are operationally interesting — Cancelled
+  // and Completed are the high-stakes ones (refund / close-out). Logging
+  // every In-Progress / Ready / Served transition would drown the activity
+  // page; per-order events already capture those.
+  if (to === "Cancelled" || to === "Completed") {
+    await audit({
+      outletId: order.outletId.toString(),
+      userId: by,
+      userName: opts?.byName,
+      action: `order.transition.${to.toLowerCase().replace(/\s+/g, "")}`,
+      targetType: "Order",
+      targetId: String(order._id),
+      before: { status: fromStatus },
+      after: {
+        code: order.code,
+        status: to,
+        total: order.total,
+        paymentStatus: order.paymentStatus,
+      },
+    });
+  }
   return order;
 }
 
 export async function payOrder(
   id: string,
-  method: "Cash" | "Card" | "JazzCash" | "Easypaisa" | "Stripe" | "BankTransfer"
+  method: "Cash" | "Card" | "JazzCash" | "Easypaisa" | "Stripe" | "BankTransfer",
+  by?: string,
+  byName?: string
 ) {
   const order = await Order.findById(id);
   if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
   const now = new Date();
   order.paymentStatus = "Paid";
   order.paymentMethod = method;
+  // Snapshot what was actually collected. If an addendum re-opens this bill,
+  // paymentStatus flips back to Pending but paidAmount stays, so the UI can
+  // surface balanceDue = total - paidAmount without re-asking what was paid.
+  (order as any).paidAmount = order.total ?? 0;
 
   // If the customer has already received their food, paying ends the
   // transaction — close the order and free the table in one step. If food
@@ -1028,5 +1616,19 @@ export async function payOrder(
   }
   emit("order:update", order.toJSON(), order.outletId.toString());
   await dispatchWebhook(order.outletId.toString(), "order.paid", order.toJSON());
+  await audit({
+    outletId: order.outletId.toString(),
+    userId: by,
+    userName: byName,
+    action: "order.pay",
+    targetType: "Order",
+    targetId: String(order._id),
+    after: {
+      code: order.code,
+      method,
+      amount: order.total,
+      paidAmount: (order as any).paidAmount,
+    },
+  });
   return order;
 }

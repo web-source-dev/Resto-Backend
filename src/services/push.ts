@@ -81,7 +81,8 @@ export function pushConfigured() {
 
 export async function sendPushToOutlet(
   outletId: string,
-  payload: { title: string; body?: string; url?: string; tag?: string }
+  payload: { title: string; body?: string; url?: string; tag?: string; level?: string },
+  target?: { userId?: string; roles?: string[] }
 ) {
   if (!ensureConfigured()) {
     console.warn("[push] skipped send — VAPID not configured");
@@ -89,7 +90,14 @@ export async function sendPushToOutlet(
   }
 
   const oid = String(outletId);
-  const subs = await PushSubscription.find({ outletId: oid }).lean();
+  const query: Record<string, unknown> = { outletId: oid };
+  // Personal target wins; otherwise narrow by role list; otherwise outlet-wide broadcast.
+  if (target?.userId) {
+    query.userId = String(target.userId);
+  } else if (target?.roles && target.roles.length > 0) {
+    query.role = { $in: target.roles };
+  }
+  const subs = await PushSubscription.find(query).lean();
   if (!subs.length) {
     return;
   }

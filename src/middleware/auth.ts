@@ -36,3 +36,18 @@ export function requireRole(...roles: string[]) {
     next();
   };
 }
+
+/**
+ * Inverse of requireRole: blocks the listed roles, allows everyone else.
+ * Used to hide PII / operational reads from roles that don't need them
+ * (e.g. riders shouldn't see the customer list, supplier list, expenses,
+ * staff roster, etc.) without having to enumerate every allowed role.
+ */
+export function excludeRoles(...roles: string[]) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    if (roles.includes(req.user.role))
+      return res.status(403).json({ error: "Forbidden" });
+    next();
+  };
+}

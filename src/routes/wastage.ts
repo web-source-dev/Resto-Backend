@@ -2,12 +2,15 @@ import { Router } from "express";
 import { Wastage } from "../models/Wastage";
 import { Ingredient } from "../models/Ingredient";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest, requireRole } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, requireRole, excludeRoles } from "../middleware/auth";
 import { emit } from "../sockets";
 import { notify } from "../services/notify";
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 const canApprove = requireRole("admin", "manager");
 
 r.get(
@@ -38,9 +41,15 @@ r.post(
       const ing = await Ingredient.findById(ingredientId);
       if (ing) {
         cost = Math.round((ing.costPerUnit ?? 0) * Number(qty));
-        ing.stock = Math.max(0, (ing.stock ?? 0) - Number(qty));
+        ing.stock =
+          Math.round(Math.max(0, (ing.stock ?? 0) - Number(qty)) * 10000) / 10000;
         await ing.save();
         emit("inventory:update", { id: ing._id.toString() }, req.outletId);
+        // Lazy import to avoid the orderService ↔ wastage circular load.
+        const { recomputeMenuStockStatusForIngredient } = await import(
+          "../services/orderService"
+        );
+        await recomputeMenuStockStatusForIngredient(ing._id);
       }
     }
     const approved = cost < 500; // threshold per PRD

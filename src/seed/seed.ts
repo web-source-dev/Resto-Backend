@@ -140,6 +140,23 @@ export async function maybeSeed() {
     { sku: "ONN-013", name: "Onions", category: "Produce", unit: "kg", stock: 28, par: 15, costPerUnit: 120, days: 15 },
     { sku: "CKL-014", name: "Coca-Cola 500ml", category: "Beverages", unit: "pcs", stock: 84, par: 40, costPerUnit: 60, days: 180 },
     { sku: "COF-015", name: "Coffee beans", category: "Pantry", unit: "kg", stock: 4.8, par: 3, costPerUnit: 2800, days: 120 },
+    // Non-recipe consumables — tracked the same way as food ingredients so
+    // POs, low-stock alerts, and supplier variance work for free. Categories
+    // (Packaging / Disposables / Condiments / Cleaning) drive the supplies
+    // picker on the order modal.
+    { sku: "BOX-S-101", name: "Takeaway box (small)", category: "Packaging", unit: "pcs", stock: 480, par: 200, costPerUnit: 13, days: 365 },
+    { sku: "BOX-L-102", name: "Takeaway box (large)", category: "Packaging", unit: "pcs", stock: 320, par: 150, costPerUnit: 22, days: 365 },
+    { sku: "FOIL-103", name: "Foil tray", category: "Packaging", unit: "pcs", stock: 240, par: 100, costPerUnit: 18, days: 365 },
+    { sku: "BAG-104", name: "Paper bag (delivery)", category: "Packaging", unit: "pcs", stock: 600, par: 250, costPerUnit: 9, days: 365 },
+    { sku: "NAP-201", name: "Paper napkin", category: "Disposables", unit: "pcs", stock: 4200, par: 2000, costPerUnit: 1.5, days: 365 },
+    { sku: "TIS-202", name: "Tissue paper roll", category: "Disposables", unit: "pcs", stock: 60, par: 30, costPerUnit: 95, days: 365 },
+    { sku: "SPN-203", name: "Plastic spoon", category: "Disposables", unit: "pcs", stock: 1100, par: 500, costPerUnit: 2, days: 365 },
+    { sku: "FRK-204", name: "Plastic fork", category: "Disposables", unit: "pcs", stock: 950, par: 500, costPerUnit: 2, days: 365 },
+    { sku: "STR-205", name: "Plastic straw", category: "Disposables", unit: "pcs", stock: 1800, par: 800, costPerUnit: 1, days: 365 },
+    { sku: "KET-301", name: "Ketchup sachet", category: "Condiments", unit: "pcs", stock: 2400, par: 1000, costPerUnit: 4, days: 540 },
+    { sku: "MAY-302", name: "Mayo sachet", category: "Condiments", unit: "pcs", stock: 1600, par: 800, costPerUnit: 5, days: 540 },
+    { sku: "CHL-303", name: "Chilli sauce sachet", category: "Condiments", unit: "pcs", stock: 1200, par: 600, costPerUnit: 5, days: 540 },
+    { sku: "SLT-304", name: "Salt sachet", category: "Condiments", unit: "pcs", stock: 2000, par: 800, costPerUnit: 0.5, days: 720 },
   ];
   const ings: Record<string, any> = {};
   for (const i of ingDefs) {
@@ -403,6 +420,79 @@ export async function maybeSeed() {
     { item: items.find((i: any) => i.name === "Caesar Salad"), qty: 2 },
     { item: items.find((i: any) => i.name === "Mint Margarita"), qty: 1 },
   ] });
+
+  // QR-placed orders awaiting receptionist review. Without these the
+  // /api/orders?pending=true inbox is empty on a fresh deploy and the
+  // manager's "needs review" queue looks broken.
+  const burgerItem = items.find((i: any) => i.name === "Beef Burger");
+  const fryItem = items.find((i: any) => i.name === "Loaded Fries");
+  const colaItem = items.find((i: any) => i.name === "Cold Coffee");
+  if (burgerItem && fryItem && colaItem) {
+    code += 1;
+    const placedAt = new Date(Date.now() - 90 * 1000);
+    const t11 = tables.find((t) => t.code === "T-11");
+    const pendingItems = [
+      { menuItemId: burgerItem._id, name: burgerItem.name, qty: 1, price: burgerItem.price, mods: [], status: "Pending" as const },
+      { menuItemId: fryItem._id, name: fryItem.name, qty: 1, price: fryItem.price, mods: [], status: "Pending" as const },
+    ];
+    const sub1 = pendingItems.reduce((s, i) => s + i.price * i.qty, 0);
+    await Order.create({
+      outletId: outlet._id,
+      code: `#A-${code}`,
+      channel: "Dine-in",
+      tableCode: "T-11",
+      tableId: t11?._id,
+      customerName: "Guest at T-11",
+      customerPhone: "+92 333 8000001",
+      source: "customer",
+      items: pendingItems,
+      subtotal: sub1,
+      tax: Math.round(sub1 * 0.16),
+      service: Math.round(sub1 * 0.05),
+      total: sub1 + Math.round(sub1 * 0.16) + Math.round(sub1 * 0.05),
+      status: "Pending",
+      paymentStatus: "Pending",
+      placedAt,
+      events: [{ status: "Pending", at: placedAt }],
+    });
+
+    // A second case: a Queued order with an item-level Pending addendum on
+    // top — exercises the "items.status: Pending" branch of the inbox query.
+    code += 1;
+    const placedAt2 = new Date(Date.now() - 6 * 60 * 1000);
+    const queued: any[] = [
+      { menuItemId: burgerItem._id, name: burgerItem.name, qty: 2, price: burgerItem.price, mods: [], status: "Queued" },
+      { menuItemId: colaItem._id, name: colaItem.name, qty: 2, price: colaItem.price, mods: [], status: "Queued" },
+    ];
+    const addendum = [
+      { menuItemId: fryItem._id, name: fryItem.name, qty: 1, price: fryItem.price, mods: [], status: "Pending" as const, addendum: true, addedAt: new Date() },
+    ];
+    const t06 = tables.find((t) => t.code === "T-06");
+    const sub2 = [...queued, ...addendum].reduce((s: number, i: any) => s + i.price * i.qty, 0);
+    await Order.create({
+      outletId: outlet._id,
+      code: `#A-${code}`,
+      channel: "Dine-in",
+      tableCode: "T-06",
+      tableId: t06?._id,
+      customerName: "Guest at T-06",
+      customerPhone: "+92 333 8000002",
+      source: "customer",
+      items: [...queued, ...addendum],
+      subtotal: sub2,
+      tax: Math.round(sub2 * 0.16),
+      service: Math.round(sub2 * 0.05),
+      total: sub2 + Math.round(sub2 * 0.16) + Math.round(sub2 * 0.05),
+      status: "Queued",
+      paymentStatus: "Pending",
+      placedAt: placedAt2,
+      acceptedAt: new Date(placedAt2.getTime() + 60 * 1000),
+      events: [
+        { status: "Queued", at: placedAt2 },
+        { status: "Addendum requested (1 items)", at: new Date() },
+      ],
+    });
+  }
 
   // Completed today (throughout day)
   for (let i = 0; i < 45; i++) {

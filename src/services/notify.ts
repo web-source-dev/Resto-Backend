@@ -24,12 +24,23 @@ export async function notify(args: {
     targetRoles: args.targetRoles ?? [],
     userId: args.targetUserId,
   });
-  emit("notification:new", n.toJSON(), args.outletId);
-  await sendPushToOutlet(args.outletId, {
-    title: args.title,
-    body: args.body,
-    url: args.link,
-    tag: args.type,
-  });
+  // Realtime + push must respect the same targeting that the REST list endpoint
+  // applies, so devices outside the audience never see/hear the notification.
+  const target = {
+    userId: args.targetUserId,
+    roles: args.targetRoles,
+  };
+  emit("notification:new", n.toJSON(), args.outletId, target);
+  await sendPushToOutlet(
+    args.outletId,
+    {
+      title: args.title,
+      body: args.body,
+      url: args.link,
+      tag: args.type,
+      level: args.level ?? "info",
+    },
+    target
+  );
   return n;
 }

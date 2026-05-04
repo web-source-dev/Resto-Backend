@@ -7,10 +7,13 @@ import { Ingredient } from "../models/Ingredient";
 import { MenuItem } from "../models/MenuItem";
 import { Wastage } from "../models/Wastage";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, excludeRoles } from "../middleware/auth";
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 
 function startOfDay(d = new Date()) {
   const x = new Date(d);
@@ -136,9 +139,15 @@ r.get(
         revenueToday: Math.round(revenueToday),
         orders: todayOrders.length,
         aov: Math.round(aov),
+        // `ots` is the human-readable label kept for back-compat; numeric
+        // shadow fields let the frontend sort, format, or threshold without
+        // string-parsing.
         ots: `${otsMin}m ${otsSec}s`,
+        otsSeconds: ots,
         foodCostPct: Number(foodCostPct.toFixed(1)),
         activeTables: `${occupied} / ${tables.length}`,
+        activeTablesCount: occupied,
+        totalTables: tables.length,
         freeTables: free,
         cleaningTables: cleaning,
         activeStaff: staff.length,

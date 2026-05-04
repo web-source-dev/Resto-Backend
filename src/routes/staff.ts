@@ -3,12 +3,15 @@ import bcrypt from "bcryptjs";
 import { User } from "../models/User";
 import { Order } from "../models/Order";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest, requireRole } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, requireRole, excludeRoles } from "../middleware/auth";
 import { notify } from "../services/notify";
 import { Attendance } from "../models/Attendance";
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 const canManage = requireRole("admin", "manager");
 
 r.get(

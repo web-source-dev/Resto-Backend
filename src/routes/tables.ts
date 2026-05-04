@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Table } from "../models/Table";
 import { Reservation } from "../models/Reservation";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest, requireRole } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, requireRole, excludeRoles } from "../middleware/auth";
 import { emit } from "../sockets";
 import { closeTableSession } from "../services/orderService";
 
@@ -11,6 +11,9 @@ const canManageTables = requireRole("admin", "manager", "receptionist");
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 
 r.get(
   "/",

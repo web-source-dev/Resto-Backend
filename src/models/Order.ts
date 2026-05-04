@@ -19,9 +19,11 @@ const OrderItemSchema = new Schema(
     note: String,
     status: {
       type: String,
-      enum: ["Pending", "Queued", "In Progress", "Ready"],
+      enum: ["Pending", "Queued", "In Progress", "Ready", "Cancelled"],
       default: "Queued",
     },
+    cancelledAt: Date,
+    cancelReason: String,
     eta: Date,
     addendum: { type: Boolean, default: false },
     addedAt: { type: Date, default: Date.now },
@@ -109,6 +111,10 @@ const OrderSchema = new Schema(
       enum: ["Pending", "Paid", "Refunded"],
       default: "Pending",
     },
+    // Snapshot of order.total at the moment of payment. When an addendum
+    // re-opens a Paid bill, paymentStatus flips back to Pending but paidAmount
+    // is retained so the UI can show balanceDue = total - paidAmount.
+    paidAmount: { type: Number, default: 0 },
     paymentMethod: {
       type: String,
       enum: ["Cash", "Card", "JazzCash", "Easypaisa", "Stripe", "BankTransfer"],
@@ -121,13 +127,60 @@ const OrderSchema = new Schema(
     servedAt: Date,
     closedAt: Date,
     events: { type: [OrderEventSchema], default: [] },
+    // Non-recipe consumables used on this order (boxes, napkins, sachets, etc).
+    // Auto-deducts via the menu BOM cover predictable per-dish usage; this
+    // array captures variable / ad-hoc usage logged via "Use supplies".
+    supplies: {
+      type: [
+        new Schema(
+          {
+            ingredientId: { type: Schema.Types.ObjectId, ref: "Ingredient" },
+            name: { type: String, required: true },
+            qty: { type: Number, required: true },
+            unit: String,
+            costPerUnit: { type: Number, default: 0 },
+            at: { type: Date, default: Date.now },
+            by: { type: Schema.Types.ObjectId, ref: "User" },
+            byName: String,
+            reason: String,
+          },
+          { _id: true }
+        ),
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );
 
-OrderSchema.virtual("elapsedMin").get(function () {
+// Indexes that the reports aggregations rely on. The first covers the
+// dominant filter shape `{ outletId, placedAt: { $gte, $lte } }` plus
+// channel/payment splits used in trend, channel-mix, hour heatmap, P&L,
+// and payment-mix endpoints. The second supports the rider scorecard.
+OrderSchema.index({ outletId: 1, placedAt: -1, channel: 1 });
+OrderSchema.index({ outletId: 1, paymentMethod: 1, placedAt: -1 });
+OrderSchema.index({ outletId: 1, riderId: 1, deliveredAt: -1 });
+
+OrderSchema.virtual("elapsedMin").get(function (this: any) {
   const start = (this.acceptedAt ?? this.placedAt ?? new Date()).getTime();
-  return Math.round((Date.now() - start) / 60000);
+  // Once the kitchen marks Ready, freeze the timer at that moment. Order
+  // throughput KPIs and KDS overdue indicators should reflect prep time
+  // (placed → ready), not how long the ticket has been sitting on the pass.
+  const end = this.readyAt ? new Date(this.readyAt).getTime() : Date.now();
+  return Math.round((end - start) / 60000);
+});
+
+OrderSchema.virtual("balanceDue").get(function (this: any) {
+  const total = Number(this.total ?? 0);
+  const paid = Number(this.paidAmount ?? 0);
+  return Math.max(0, total - paid);
+});
+
+OrderSchema.virtual("suppliesCost").get(function (this: any) {
+  return (this.supplies ?? []).reduce(
+    (s: number, x: any) => s + (Number(x.qty) || 0) * (Number(x.costPerUnit) || 0),
+    0
+  );
 });
 
 OrderSchema.set("toJSON", { virtuals: true });

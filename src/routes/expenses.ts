@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { Expense, EXPENSE_CATEGORIES } from "../models/Expense";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest, requireRole } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, requireRole, excludeRoles } from "../middleware/auth";
 import { notify } from "../services/notify";
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 
 // Managers and receptionists can log everyday expenses; only
 // admin/manager can approve large ones and hit the summary endpoints.

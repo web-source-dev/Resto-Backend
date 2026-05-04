@@ -4,12 +4,15 @@ import { PurchaseOrder } from "../models/PurchaseOrder";
 import { Ingredient } from "../models/Ingredient";
 import { GoodsReceived } from "../models/GoodsReceived";
 import { asyncHandler } from "../utils/asyncHandler";
-import { authMiddleware, AuthedRequest, requireRole } from "../middleware/auth";
+import { authMiddleware, AuthedRequest, requireRole, excludeRoles } from "../middleware/auth";
 import { emit } from "../sockets";
 import { notify } from "../services/notify";
 
 const r = Router();
 r.use(authMiddleware);
+// Block riders from this resource — not relevant to delivery work and may
+// contain PII or operational data they shouldn't see.
+r.use(excludeRoles("rider"));
 const canWrite = requireRole("admin", "manager");
 
 r.get(
@@ -125,10 +128,28 @@ r.post(
         qualityNotes: match.qualityNotes,
       });
       if (l.ingredientId && receivedQty > 0) {
-        await Ingredient.updateOne(
-          { _id: l.ingredientId },
-          { $inc: { stock: receivedQty } }
+        // Round at write so float drift can't accumulate over many receipts.
+        await Ingredient.updateOne({ _id: l.ingredientId }, [
+          {
+            $set: {
+              stock: {
+                $round: [
+                  {
+                    $add: [
+                      { $ifNull: ["$stock", 0] },
+                      Math.round(receivedQty * 10000) / 10000,
+                    ],
+                  },
+                  4,
+                ],
+              },
+            },
+          },
+        ]);
+        const { recomputeMenuStockStatusForIngredient } = await import(
+          "../services/orderService"
         );
+        await recomputeMenuStockStatusForIngredient(l.ingredientId);
       }
     }
 

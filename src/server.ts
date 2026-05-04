@@ -33,6 +33,7 @@ import anomaliesRoutes from "./routes/anomalies";
 import outletsRoutes from "./routes/outlets";
 import settingsRoutes from "./routes/settings";
 import pushRoutes from "./routes/push";
+import auditRoutes from "./routes/audit";
 import { detectAnomalies } from "./services/anomalyDetector";
 
 async function main() {
@@ -131,6 +132,7 @@ async function main() {
   app.use("/api/outlets", outletsRoutes);
   app.use("/api/settings", settingsRoutes);
   app.use("/api/push", pushRoutes);
+  app.use("/api/audit", auditRoutes);
 
   // Background: run anomaly detection every hour (no cron needed)
   setInterval(() => {

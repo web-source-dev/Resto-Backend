@@ -139,7 +139,7 @@ r.post(
 
 r.get(
   "/audit",
-  canWrite,
+  adminOnly,
   asyncHandler(async (req: AuthedRequest, res) => {
     const q: any = { outletId: req.outletId };
     if (req.query.action) q.action = req.query.action;

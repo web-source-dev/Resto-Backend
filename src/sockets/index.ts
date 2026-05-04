@@ -17,6 +17,7 @@ export function initSockets(httpServer: HttpServer) {
       const payload = jwt.verify(token, env.JWT_SECRET) as any;
       (socket as any).userId = payload.sub;
       (socket as any).outletId = payload.outletId;
+      (socket as any).role = payload.role;
       next();
     } catch {
       next(new Error("invalid token"));
@@ -25,7 +26,11 @@ export function initSockets(httpServer: HttpServer) {
 
   io.on("connection", (socket: Socket) => {
     const outletId = (socket as any).outletId ?? "public";
+    const userId = (socket as any).userId;
+    const role = (socket as any).role;
     socket.join(`outlet:${outletId}`);
+    if (userId) socket.join(`user:${userId}`);
+    if (role && outletId !== "public") socket.join(`role:${outletId}:${role}`);
     socket.on("disconnect", () => {});
   });
 
@@ -42,12 +47,30 @@ function resourceForEvent(event: string): string | null {
   return null;
 }
 
-export function emit(event: string, payload: any, outletId?: string) {
+export function emit(
+  event: string,
+  payload: any,
+  outletId?: string,
+  target?: { userId?: string; roles?: string[] }
+) {
   if (!io) return;
   const oid = outletId ? String(outletId) : undefined;
-  if (oid) io.to(`outlet:${oid}`).emit(event, payload);
-  else io.emit(event, payload);
 
+  // Pick the narrowest delivery scope: personal > role list > outlet-wide.
+  if (target?.userId) {
+    io.to(`user:${String(target.userId)}`).emit(event, payload);
+  } else if (target?.roles && target.roles.length > 0 && oid) {
+    for (const role of target.roles) {
+      io.to(`role:${oid}:${role}`).emit(event, payload);
+    }
+  } else if (oid) {
+    io.to(`outlet:${oid}`).emit(event, payload);
+  } else {
+    io.emit(event, payload);
+  }
+
+  // data:changed is a cache-invalidation hint — keep it outlet-wide so all clients refetch
+  // and let server-side role gating decide what they actually see.
   const resource = resourceForEvent(event);
   if (resource) {
     const dc = {

@@ -24,15 +24,24 @@ r.get(
     };
     const q: any = { outletId: req.outletId, ...roleGate };
     if (req.query.unread === "true") q.read = false;
-    const items = await Notification.find(q)
-      .sort({ createdAt: -1 })
-      .limit(Number(req.query.limit ?? 50));
-    const unread = await Notification.countDocuments({
-      outletId: req.outletId,
-      read: false,
-      ...roleGate,
+    const limit = Math.max(1, Math.min(Number(req.query.limit ?? 50), 1000));
+    const skip = Math.max(0, Number(req.query.skip ?? 0));
+    const [items, total, unread] = await Promise.all([
+      Notification.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Notification.countDocuments(q),
+      Notification.countDocuments({
+        outletId: req.outletId,
+        read: false,
+        ...roleGate,
+      }),
+    ]);
+    res.json({
+      items,
+      total,
+      limit,
+      hasMore: skip + items.length < total,
+      unread,
     });
-    res.json({ items, unread });
   })
 );
 
