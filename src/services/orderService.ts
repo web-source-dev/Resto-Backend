@@ -56,6 +56,20 @@ function applyItemEta(
   }
 }
 
+/** Order ETA = latest item ETA (parallel prep), not the sum of line times. */
+function syncOrderEtaFromItems(order: any) {
+  let maxTs = 0;
+  for (const item of order.items as any[]) {
+    if (item.status === "Pending" || item.status === "Ready") continue;
+    if (!item.eta) continue;
+    const t = new Date(item.eta).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (t > maxTs) maxTs = t;
+  }
+  if (maxTs > 0) order.eta = new Date(maxTs);
+  else order.eta = undefined;
+}
+
 function tierForLTV(ltv: number): "Bronze" | "Silver" | "Gold" {
   if (ltv >= TIER_THRESHOLDS.Gold) return "Gold";
   if (ltv >= TIER_THRESHOLDS.Silver) return "Silver";
@@ -471,6 +485,7 @@ export async function forwardAddendum(id: string, by?: string) {
       item.eta = defaultItemEta;
     }
   }
+  syncOrderEtaFromItems(order);
   // If the kitchen had already finished the earlier round, reopen the ticket
   // so the new items make it onto the line.
   if (["Ready", "Served"].includes(order.status)) {
@@ -519,9 +534,23 @@ export async function adjustEta(
     order.eta = new Date(now.getTime() + opts.absoluteMinutes * 60 * 1000);
     applyItemEta(order, order.eta);
   } else if (opts.addMinutes) {
-    const base = order.eta && order.eta > now ? order.eta : now;
-    order.eta = new Date(base.getTime() + opts.addMinutes * 60 * 1000);
-    applyItemEta(order, order.eta);
+    const items: any[] = (order.items as any[]) ?? [];
+    const bumpable = items.filter(
+      (it) =>
+        it.eta &&
+        !["Pending", "Ready"].includes(it.status)
+    );
+    if (bumpable.length > 0) {
+      const ms = opts.addMinutes * 60 * 1000;
+      for (const it of bumpable) {
+        it.eta = new Date(new Date(it.eta).getTime() + ms);
+      }
+      syncOrderEtaFromItems(order);
+    } else {
+      const base = order.eta && order.eta > now ? order.eta : now;
+      order.eta = new Date(base.getTime() + opts.addMinutes * 60 * 1000);
+      applyItemEta(order, order.eta);
+    }
   } else {
     throw Object.assign(new Error("Provide addMinutes or absoluteMinutes"), {
       status: 400,
@@ -578,6 +607,7 @@ export async function adjustItemEta(
   }
 
   if (item.status === "Queued") item.status = "In Progress";
+  syncOrderEtaFromItems(order);
   order.events.push({
     status: `Item ETA adjusted (${item.name})`,
     at: now,
@@ -889,11 +919,7 @@ export async function transitionOrder(
   order.status = to;
   if (to === "In Progress" && !order.acceptedAt) {
     order.acceptedAt = now;
-    const etaMin = Number(opts?.etaMinutes);
-    if (etaMin && etaMin > 0 && etaMin < 240) {
-      order.eta = new Date(now.getTime() + etaMin * 60 * 1000);
-      applyItemEta(order, order.eta, true);
-    }
+    // Line-level ETAs on KDS drive order.eta via syncOrderEtaFromItems (max of lines).
     for (const item of order.items as any[]) {
       if (item.status === "Queued") item.status = "In Progress";
     }
@@ -906,6 +932,7 @@ export async function transitionOrder(
         item.eta = undefined;
       }
     }
+    syncOrderEtaFromItems(order);
   }
   if (to === "Served") order.servedAt = now;
   if (to === "Completed") {
