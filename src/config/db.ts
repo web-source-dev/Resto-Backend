@@ -1,16 +1,12 @@
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { env } from "./env";
 
-let memoryServer: MongoMemoryServer | null = null;
-
 export async function connectDB(): Promise<string> {
-  let uri = env.MONGO_URI;
+  const uri = env.MONGO_URI;
   if (!uri) {
-    memoryServer = await MongoMemoryServer.create({
-      instance: { dbName: "flavorflow" },
-    });
-    uri = memoryServer.getUri();
+    throw new Error(
+      "MONGO_URI is required. In-memory Mongo fallback is disabled."
+    );
   }
   await mongoose.connect(uri);
   mongoose.set("toJSON", {
@@ -27,5 +23,4 @@ export async function connectDB(): Promise<string> {
 
 export async function disconnectDB() {
   await mongoose.disconnect();
-  if (memoryServer) await memoryServer.stop();
 }

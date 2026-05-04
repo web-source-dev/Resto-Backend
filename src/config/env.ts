@@ -34,6 +34,10 @@ export const env = {
   // Webhook delivery
   WEBHOOK_SIGNING_SECRET: str(process.env.WEBHOOK_SIGNING_SECRET) ?? "dev-webhook-secret",
   WEBHOOK_TIMEOUT_MS: Number(process.env.WEBHOOK_TIMEOUT_MS ?? 8000),
+
+  VAPID_PUBLIC_KEY: str(process.env.VAPID_PUBLIC_KEY),
+  VAPID_PRIVATE_KEY: str(process.env.VAPID_PRIVATE_KEY),
+  VAPID_SUBJECT: str(process.env.VAPID_SUBJECT) ?? "mailto:admin@flavorflow.local",
 };
 
 export type Env = typeof env;

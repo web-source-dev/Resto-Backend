@@ -64,6 +64,16 @@ r.post(
         ? Number(req.body.redeemPoints)
         : undefined,
     });
+    emit(
+      "data:changed",
+      {
+        method: "POST",
+        resource: "orders",
+        path: "/api/qr/orders",
+        ts: Date.now(),
+      },
+      table.outletId.toString()
+    );
     res
       .status(201)
       .json({ order, loyalty: (order as any).loyalty ?? null });
@@ -204,6 +214,16 @@ r.post(
     // Inventory is deducted only when the receptionist forwards the addendum.
     // Here we just record the intent and notify the receptionist.
     emit("order:update", order.toJSON(), order.outletId.toString());
+    emit(
+      "data:changed",
+      {
+        method: "POST",
+        resource: "orders",
+        path: "/api/qr/orders/append",
+        ts: Date.now(),
+      },
+      order.outletId.toString()
+    );
     await notify({
       outletId: order.outletId.toString(),
       type: "order.new",
@@ -237,6 +257,16 @@ r.post(
       // Front-of-house concern — kitchen is busy cooking, riders are off-site.
       targetRoles: ["admin", "manager", "receptionist", "waiter"],
     });
+    emit(
+      "data:changed",
+      {
+        method: "POST",
+        resource: "notifications",
+        path: "/api/qr/order/call-waiter",
+        ts: Date.now(),
+      },
+      order.outletId.toString()
+    );
     res.json({ ok: true });
   })
 );
@@ -290,6 +320,16 @@ r.post(
       );
     }
 
+    emit(
+      "data:changed",
+      {
+        method: "POST",
+        resource: "orders",
+        path: "/api/qr/reviews",
+        ts: Date.now(),
+      },
+      outletId.toString()
+    );
     res.status(201).json({ review: rev });
   })
 );

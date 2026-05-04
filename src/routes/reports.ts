@@ -8,33 +8,84 @@ import { authMiddleware, AuthedRequest } from "../middleware/auth";
 const r = Router();
 r.use(authMiddleware);
 
+function parseRange(query: any) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const fromRaw = typeof query.from === "string" ? query.from : undefined;
+  const toRaw = typeof query.to === "string" ? query.to : undefined;
+  const days = Math.max(1, Number(query.days ?? 30));
+
+  let from = today;
+  let to = new Date(today);
+  to.setDate(to.getDate() + 1);
+
+  if (fromRaw) {
+    const parsedFrom = new Date(fromRaw);
+    if (!Number.isNaN(parsedFrom.getTime())) from = parsedFrom;
+  } else {
+    from = new Date(today);
+    from.setDate(from.getDate() - days);
+  }
+
+  if (toRaw) {
+    const parsedTo = new Date(toRaw);
+    if (!Number.isNaN(parsedTo.getTime())) {
+      to = new Date(parsedTo);
+      to.setHours(23, 59, 59, 999);
+    }
+  }
+
+  return { from, to };
+}
+
 r.get(
   "/trend",
   asyncHandler(async (req: AuthedRequest, res) => {
-    const days = Number(req.query.days ?? 30);
-    const from = new Date();
-    from.setHours(0, 0, 0, 0);
-    from.setDate(from.getDate() - days);
+    const { from, to } = parseRange(req.query);
+    const msInDay = 24 * 60 * 60 * 1000;
+    const days = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / msInDay));
+    const prevFrom = new Date(from.getTime() - days * msInDay);
+    const prevTo = new Date(from.getTime() - 1);
     const orders = await Order.find({
       outletId: req.outletId,
-      placedAt: { $gte: from },
+      placedAt: { $gte: from, $lte: to },
+    });
+    const prevOrders = await Order.find({
+      outletId: req.outletId,
+      placedAt: { $gte: prevFrom, $lte: prevTo },
     });
     const buckets: Record<string, number> = {};
+    const prevBuckets: Record<string, number> = {};
     for (let i = 0; i < days; i++) {
       const d = new Date(from);
       d.setDate(from.getDate() + i);
       buckets[d.toISOString().slice(0, 10)] = 0;
+      const p = new Date(prevFrom);
+      p.setDate(prevFrom.getDate() + i);
+      prevBuckets[p.toISOString().slice(0, 10)] = 0;
     }
     for (const o of orders) {
       const k = o.placedAt!.toISOString().slice(0, 10);
       if (k in buckets) buckets[k] += o.total ?? 0;
     }
+    for (const o of prevOrders) {
+      const k = o.placedAt!.toISOString().slice(0, 10);
+      if (k in prevBuckets) prevBuckets[k] += o.total ?? 0;
+    }
     res.json({
-      trend: Object.entries(buckets).map(([d, rev], i) => ({
-        d: String(i + 1),
-        rev: Math.round(rev),
-        prev: Math.round(rev * (0.82 + Math.random() * 0.12)),
-      })),
+      from,
+      to,
+      trend: Object.keys(buckets).map((k, i) => {
+        const p = new Date(prevFrom);
+        p.setDate(prevFrom.getDate() + i);
+        const prevKey = p.toISOString().slice(0, 10);
+        return {
+          d: String(i + 1),
+          rev: Math.round(buckets[k] ?? 0),
+          prev: Math.round(prevBuckets[prevKey] ?? 0),
+        };
+      }),
     });
   })
 );
@@ -100,12 +151,10 @@ r.get(
 r.get(
   "/summary",
   asyncHandler(async (req: AuthedRequest, res) => {
-    const days = 30;
-    const from = new Date();
-    from.setDate(from.getDate() - days);
+    const { from, to } = parseRange(req.query);
     const orders = await Order.find({
       outletId: req.outletId,
-      placedAt: { $gte: from },
+      placedAt: { $gte: from, $lte: to },
     });
     const revenue = orders.reduce((s, o) => s + (o.total ?? 0), 0);
     const items = await MenuItem.find({ outletId: req.outletId });
@@ -121,14 +170,46 @@ r.get(
     const grossMargin = revenue ? ((revenue - plateCost) / revenue) * 100 : 0;
     const wastage = await Wastage.find({
       outletId: req.outletId,
-      at: { $gte: from },
+      at: { $gte: from, $lte: to },
     });
     const wastageCost = wastage.reduce((s, w) => s + (w.cost ?? 0), 0);
     res.json({
+      from,
+      to,
       revenue: Math.round(revenue),
       foodCostPct: Number(foodCostPct.toFixed(1)),
       grossMargin: Number(grossMargin.toFixed(1)),
       wastagePct: revenue ? Number(((wastageCost / revenue) * 100).toFixed(1)) : 0,
+    });
+  })
+);
+
+r.get(
+  "/export",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const { from, to } = parseRange(req.query);
+    const orders = await Order.find({
+      outletId: req.outletId,
+      placedAt: { $gte: from, $lte: to },
+    }).sort({ placedAt: 1 });
+
+    res.json({
+      from,
+      to,
+      orders: orders.map((o: any) => ({
+        code: o.code,
+        placedAt: o.placedAt,
+        channel: o.channel,
+        tableCode: o.tableCode ?? "",
+        customerName: o.customerName ?? "Walk-in",
+        items: o.items?.length ?? 0,
+        subtotal: o.subtotal ?? 0,
+        tax: o.tax ?? 0,
+        service: o.service ?? 0,
+        total: o.total ?? 0,
+        status: o.status,
+        paymentStatus: o.paymentStatus,
+      })),
     });
   })
 );

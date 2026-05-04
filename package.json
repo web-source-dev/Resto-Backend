@@ -24,6 +24,7 @@
     "socket.io": "^4.8.1",
     "stripe": "^22.0.2",
     "twilio": "^5.13.1",
+    "web-push": "^3.6.7",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -33,6 +34,7 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.9.0",
     "@types/nodemailer": "^8.0.0",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

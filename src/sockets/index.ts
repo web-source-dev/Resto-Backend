@@ -32,8 +32,31 @@ export function initSockets(httpServer: HttpServer) {
   return io;
 }
 
+/** Maps domain events → generic invalidation so useApi refreshes without duplicate listeners. */
+function resourceForEvent(event: string): string | null {
+  if (event === "order:new" || event === "order:update") return "orders";
+  if (event === "table:update") return "tables";
+  if (event === "inventory:update") return "inventory";
+  if (event === "wastage:new") return "wastage";
+  if (event === "notification:new") return "notifications";
+  return null;
+}
+
 export function emit(event: string, payload: any, outletId?: string) {
   if (!io) return;
-  if (outletId) io.to(`outlet:${outletId}`).emit(event, payload);
+  const oid = outletId ? String(outletId) : undefined;
+  if (oid) io.to(`outlet:${oid}`).emit(event, payload);
   else io.emit(event, payload);
+
+  const resource = resourceForEvent(event);
+  if (resource) {
+    const dc = {
+      method: "SOCKET",
+      resource,
+      path: `/api/${resource}`,
+      ts: Date.now(),
+    };
+    if (oid) io.to(`outlet:${oid}`).emit("data:changed", dc);
+    else io.emit("data:changed", dc);
+  }
 }

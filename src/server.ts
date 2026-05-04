@@ -5,9 +5,7 @@ import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
 import { connectDB } from "./config/db";
 import { errorHandler } from "./middleware/errorHandler";
-import { initSockets } from "./sockets";
-import { maybeSeed } from "./seed/seed";
-import { ensureTestUsers } from "./seed/ensureUsers";
+import { emit, initSockets } from "./sockets";
 
 import authRoutes from "./routes/auth";
 import overviewRoutes from "./routes/overview";
@@ -34,13 +32,12 @@ import waitlistRoutes from "./routes/waitlist";
 import anomaliesRoutes from "./routes/anomalies";
 import outletsRoutes from "./routes/outlets";
 import settingsRoutes from "./routes/settings";
+import pushRoutes from "./routes/push";
 import { detectAnomalies } from "./services/anomalyDetector";
 
 async function main() {
   const uri = await connectDB();
   console.log("[db] connected:", uri.slice(0, 60));
-  await maybeSeed();
-  await ensureTestUsers();
 
   const app = express();
   app.use(
@@ -50,6 +47,44 @@ async function main() {
     })
   );
   app.use(express.json({ limit: "2mb" }));
+
+  // Emit a generic realtime invalidation event for all successful write requests.
+  // Frontend hooks can subscribe once and refresh active views automatically.
+  app.use((req, res, next) => {
+    const method = req.method.toUpperCase();
+    const isWrite =
+      method === "POST" ||
+      method === "PUT" ||
+      method === "PATCH" ||
+      method === "DELETE";
+    if (!isWrite || !req.path.startsWith("/api/")) return next();
+
+    const originalJson = res.json.bind(res);
+    res.json = ((body: any) => {
+      if (res.statusCode < 400) {
+        const outletId = (req as any).outletId;
+        const resource = req.path.split("/").filter(Boolean)[1] ?? "unknown";
+        // Guest QR routes have no JWT → no req.outletId. Broadcasting globally would
+        // refresh every outlet and miss nothing — but we skip here and let qr routes
+        // emit `data:changed` scoped to the correct outlet.
+        if (!outletId && req.path.startsWith("/api/qr")) {
+          return originalJson(body);
+        }
+        emit(
+          "data:changed",
+          {
+            method,
+            resource,
+            path: req.path,
+            ts: Date.now(),
+          },
+          outletId
+        );
+      }
+      return originalJson(body);
+    }) as typeof res.json;
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
@@ -95,6 +130,7 @@ async function main() {
   app.use("/api/anomalies", anomaliesRoutes);
   app.use("/api/outlets", outletsRoutes);
   app.use("/api/settings", settingsRoutes);
+  app.use("/api/push", pushRoutes);
 
   // Background: run anomaly detection every hour (no cron needed)
   setInterval(() => {

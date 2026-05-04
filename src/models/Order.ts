@@ -22,6 +22,7 @@ const OrderItemSchema = new Schema(
       enum: ["Pending", "Queued", "In Progress", "Ready"],
       default: "Queued",
     },
+    eta: Date,
     addendum: { type: Boolean, default: false },
     addedAt: { type: Date, default: Date.now },
   },

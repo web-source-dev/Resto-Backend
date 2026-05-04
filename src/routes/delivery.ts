@@ -188,13 +188,23 @@ r.get(
         .limit(20),
     ]);
 
-    // Unassigned Ready deliveries the rider could self-claim
+    // Unassigned deliveries the rider could self-claim (Ready, or legacy Served bumped too early)
     const unassigned = await Order.find({
       outletId: req.outletId,
       channel: "Delivery",
-      status: "Ready",
-      riderId: { $in: [null, undefined] },
       sessionClosed: { $ne: true },
+      $or: [{ riderId: null }, { riderId: { $exists: false } }],
+      $and: [
+        {
+          $or: [
+            { status: "Ready" },
+            {
+              status: "Served",
+              $or: [{ pickedUpAt: null }, { pickedUpAt: { $exists: false } }],
+            },
+          ],
+        },
+      ],
     })
       .sort({ readyAt: 1 })
       .limit(10);

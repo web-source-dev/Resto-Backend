@@ -9,6 +9,7 @@ import {
   forwardOrder,
   forwardAddendum,
   adjustEta,
+  adjustItemEta,
 } from "../services/orderService";
 
 const r = Router();
@@ -100,6 +101,27 @@ r.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const order = await adjustEta(
       req.params.id,
+      {
+        addMinutes: req.body.addMinutes
+          ? Number(req.body.addMinutes)
+          : undefined,
+        absoluteMinutes: req.body.absoluteMinutes
+          ? Number(req.body.absoluteMinutes)
+          : undefined,
+      },
+      req.user?._id
+    );
+    res.json({ order });
+  })
+);
+
+r.post(
+  "/:id/items/:itemId/eta",
+  canAdjustEta,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const order = await adjustItemEta(
+      req.params.id,
+      req.params.itemId,
       {
         addMinutes: req.body.addMinutes
           ? Number(req.body.addMinutes)

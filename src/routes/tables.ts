@@ -7,6 +7,7 @@ import { emit } from "../sockets";
 import { closeTableSession } from "../services/orderService";
 
 const canFree = requireRole("admin", "manager", "receptionist", "waiter");
+const canManageTables = requireRole("admin", "manager", "receptionist");
 
 const r = Router();
 r.use(authMiddleware);
@@ -39,6 +40,23 @@ r.patch(
     if (!t) return res.status(404).json({ error: "Not found" });
     emit("table:update", { id: t._id.toString() }, req.outletId);
     res.json({ table: t });
+  })
+);
+
+r.delete(
+  "/:id",
+  canManageTables,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const t = await Table.findOne({ _id: req.params.id, outletId: req.outletId });
+    if (!t) return res.status(404).json({ error: "Not found" });
+    if (t.status !== "Free") {
+      return res
+        .status(400)
+        .json({ error: "Only Free tables can be removed. Free it first." });
+    }
+    await t.deleteOne();
+    emit("table:update", { id: req.params.id, deleted: true }, req.outletId);
+    res.json({ ok: true });
   })
 );
 

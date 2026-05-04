@@ -1,5 +1,6 @@
 import { Notification } from "../models/Notification";
 import { emit } from "../sockets";
+import { sendPushToOutlet } from "./push";
 
 export async function notify(args: {
   outletId: string;
@@ -24,5 +25,11 @@ export async function notify(args: {
     userId: args.targetUserId,
   });
   emit("notification:new", n.toJSON(), args.outletId);
+  await sendPushToOutlet(args.outletId, {
+    title: args.title,
+    body: args.body,
+    url: args.link,
+    tag: args.type,
+  });
   return n;
 }

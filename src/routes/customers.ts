@@ -20,6 +20,37 @@ r.get(
 // Staff-side lookup: receptionist types a phone and gets the matched customer
 // so they can prefill name/email + show a loyalty chip in the UI.
 r.get(
+  "/suggest",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const q = String(req.query.q ?? "").trim();
+    const field = String(req.query.field ?? "name") as "name" | "phone" | "email";
+    if (q.length < 2) return res.json({ suggestions: [] });
+
+    const allowed = new Set(["name", "phone", "email"]);
+    const safeField = allowed.has(field) ? field : "name";
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+    const customers = await Customer.find({
+      outletId: req.outletId,
+      [safeField]: re,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(8)
+      .select("name phone email");
+
+    const suggestions = customers
+      .map((c: any) => ({
+        name: c.name ?? "",
+        phone: c.phone ?? "",
+        email: c.email ?? "",
+      }))
+      .filter((s) => s[safeField]);
+
+    res.json({ suggestions });
+  })
+);
+
+r.get(
   "/lookup",
   asyncHandler(async (req: AuthedRequest, res) => {
     const phone = String(req.query.phone ?? "").trim();

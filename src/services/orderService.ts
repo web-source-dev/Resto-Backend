@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { Order } from "../models/Order";
 import { MenuItem } from "../models/MenuItem";
 import { Ingredient } from "../models/Ingredient";
@@ -19,6 +20,42 @@ const TIER_THRESHOLDS = {
   Gold: 50000,
 };
 
+/** Resolve outlet document; if User/Table references an ID with no row (e.g. after partial DB reset), create a minimal Outlet so orders still work. */
+async function ensureOutlet(outletId: string) {
+  const id = String(outletId ?? "").trim();
+  if (!id || !Types.ObjectId.isValid(id)) {
+    throw Object.assign(new Error("Invalid outlet"), { status: 400 });
+  }
+  let outlet = await Outlet.findById(id);
+  if (outlet) return outlet;
+  try {
+    outlet = await Outlet.create({
+      _id: new Types.ObjectId(id),
+      name: "Restaurant",
+    });
+    return outlet;
+  } catch (e: any) {
+    if (e?.code === 11000) {
+      outlet = await Outlet.findById(id);
+      if (outlet) return outlet;
+    }
+    throw e;
+  }
+}
+
+function applyItemEta(
+  order: any,
+  targetEta: Date,
+  onlyPendingOrQueued = false
+) {
+  for (const item of order.items as any[]) {
+    if (item.status === "Ready") continue;
+    if (onlyPendingOrQueued && !["Pending", "Queued"].includes(item.status)) continue;
+    item.eta = targetEta;
+    if (item.status !== "Ready") item.status = "In Progress";
+  }
+}
+
 function tierForLTV(ltv: number): "Bronze" | "Silver" | "Gold" {
   if (ltv >= TIER_THRESHOLDS.Gold) return "Gold";
   if (ltv >= TIER_THRESHOLDS.Silver) return "Silver";
@@ -33,11 +70,18 @@ async function upsertCustomerForOrder(args: {
   total: number;
   favoriteItemName?: string;
   marketingOptIn?: boolean;
+  forceCreate?: boolean;
 }): Promise<{ customer: any; pointsEarned: number; isNew: boolean; prevTier: string } | null> {
-  if (!args.phone && !args.email) return null;
+  const normalizedName = (args.name ?? "").trim();
+  const hasMeaningfulName =
+    !!normalizedName &&
+    normalizedName.toLowerCase() !== "walk-in guest" &&
+    normalizedName.toLowerCase() !== "guest";
+  if (!args.phone && !args.email && !hasMeaningfulName && !args.forceCreate) return null;
   const filter: any = { outletId: args.outletId };
   if (args.phone) filter.phone = args.phone;
   else if (args.email) filter.email = args.email.toLowerCase();
+  else if (hasMeaningfulName) filter.name = new RegExp(`^${normalizedName}$`, "i");
 
   let customer = await Customer.findOne(filter);
   const pointsEarned = Math.max(0, Math.round(args.total * POINTS_PER_RUPEE));
@@ -47,7 +91,7 @@ async function upsertCustomerForOrder(args: {
   if (!customer) {
     customer = await Customer.create({
       outletId: args.outletId,
-      name: args.name || "Guest",
+      name: normalizedName || "Walk-in guest",
       phone: args.phone,
       email: args.email?.toLowerCase(),
       tier: "Bronze",
@@ -111,8 +155,7 @@ export async function createOrder(input: {
   const source = input.source ?? "staff";
   const initialStatus: "Pending" | "Queued" =
     source === "customer" ? "Pending" : "Queued";
-  const outlet = await Outlet.findById(input.outletId);
-  if (!outlet) throw Object.assign(new Error("Outlet not found"), { status: 404 });
+  const outlet = await ensureOutlet(input.outletId);
   const menuIds = input.items.map((i) => i.menuItemId);
   const menuItems = await MenuItem.find({ _id: { $in: menuIds } });
   const menuMap = new Map(menuItems.map((m) => [m._id.toString(), m]));
@@ -248,6 +291,7 @@ export async function createOrder(input: {
     total,
     favoriteItemName: topItem?.name,
     marketingOptIn: input.marketingOptIn,
+    forceCreate: source === "customer" || !!(input.customerName && input.customerName.trim()),
   });
   if (loyalty) {
     order.customerId = loyalty.customer._id as any;
@@ -415,9 +459,17 @@ export async function forwardAddendum(id: string, by?: string) {
     }
   }
 
-  // Promote each pending item to Queued so KDS can see it.
+  // Promote each pending item to Queued so KDS can see it and assign an
+  // item-level ETA immediately for customer visibility.
+  const defaultItemEta =
+    order.eta && order.eta > new Date()
+      ? order.eta
+      : new Date(Date.now() + 12 * 60 * 1000);
   for (const item of order.items as any[]) {
-    if (item.status === "Pending") item.status = "Queued";
+    if (item.status === "Pending") {
+      item.status = "Queued";
+      item.eta = defaultItemEta;
+    }
   }
   // If the kitchen had already finished the earlier round, reopen the ticket
   // so the new items make it onto the line.
@@ -465,9 +517,11 @@ export async function adjustEta(
   const now = new Date();
   if (opts.absoluteMinutes && opts.absoluteMinutes > 0) {
     order.eta = new Date(now.getTime() + opts.absoluteMinutes * 60 * 1000);
+    applyItemEta(order, order.eta);
   } else if (opts.addMinutes) {
     const base = order.eta && order.eta > now ? order.eta : now;
     order.eta = new Date(base.getTime() + opts.addMinutes * 60 * 1000);
+    applyItemEta(order, order.eta);
   } else {
     throw Object.assign(new Error("Provide addMinutes or absoluteMinutes"), {
       status: 400,
@@ -477,6 +531,55 @@ export async function adjustEta(
     status: `ETA adjusted (${
       opts.addMinutes ? `+${opts.addMinutes}m` : `${opts.absoluteMinutes}m`
     })`,
+    at: now,
+    by: by as any,
+  });
+  await order.save();
+  emit("order:update", order.toJSON(), order.outletId.toString());
+  return order;
+}
+
+export async function adjustItemEta(
+  orderId: string,
+  itemId: string,
+  opts: { addMinutes?: number; absoluteMinutes?: number },
+  by?: string
+) {
+  let order;
+  try {
+    order = await Order.findById(orderId);
+  } catch {
+    throw Object.assign(new Error("Invalid order id"), { status: 404 });
+  }
+  if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+
+  const rawItemId = String(itemId ?? "").trim();
+  const item: any = (order.items as any[]).find((x: any) => {
+    const lineId =
+      x?._id != null ? String(x._id) : x?.id != null ? String(x.id) : "";
+    return lineId && lineId === rawItemId;
+  });
+  if (!item) throw Object.assign(new Error("Order item not found"), { status: 404 });
+  if (item.status === "Pending")
+    throw Object.assign(new Error("Item is pending approval"), { status: 409 });
+  if (item.status === "Ready")
+    throw Object.assign(new Error("Item is already ready"), { status: 409 });
+
+  const now = new Date();
+  if (opts.absoluteMinutes && opts.absoluteMinutes > 0) {
+    item.eta = new Date(now.getTime() + opts.absoluteMinutes * 60 * 1000);
+  } else if (opts.addMinutes && opts.addMinutes > 0) {
+    const base = item.eta && item.eta > now ? item.eta : now;
+    item.eta = new Date(base.getTime() + opts.addMinutes * 60 * 1000);
+  } else {
+    throw Object.assign(new Error("Provide addMinutes or absoluteMinutes"), {
+      status: 400,
+    });
+  }
+
+  if (item.status === "Queued") item.status = "In Progress";
+  order.events.push({
+    status: `Item ETA adjusted (${item.name})`,
     at: now,
     by: by as any,
   });
@@ -509,6 +612,19 @@ async function ensureRiderAvailable(riderId: string) {
   return rider;
 }
 
+function canAssignOrClaimRider(order: any): boolean {
+  if (["Ready", "Queued", "In Progress"].includes(order.status)) return true;
+  // Kitchen may have hit "Served" by mistake before assignment — still dispatchable
+  if (
+    order.channel === "Delivery" &&
+    order.status === "Served" &&
+    !order.pickedUpAt &&
+    !order.riderId
+  )
+    return true;
+  return false;
+}
+
 export async function assignRider(
   orderId: string,
   riderId: string,
@@ -518,7 +634,7 @@ export async function assignRider(
   if (!order) throw Object.assign(new Error("Order not found"), { status: 404 });
   if (order.channel !== "Delivery")
     throw Object.assign(new Error("Not a delivery order"), { status: 400 });
-  if (!["Ready", "Queued", "In Progress"].includes(order.status))
+  if (!canAssignOrClaimRider(order))
     throw Object.assign(
       new Error(`Can't assign a rider to a ${order.status} order`),
       { status: 409 }
@@ -555,7 +671,7 @@ export async function claimDelivery(orderId: string, riderId: string) {
     throw Object.assign(new Error("Not a delivery order"), { status: 400 });
   if (order.riderId)
     throw Object.assign(new Error("Already assigned"), { status: 409 });
-  if (!["Ready", "Queued", "In Progress"].includes(order.status))
+  if (!canAssignOrClaimRider(order))
     throw Object.assign(new Error("Order not claimable"), { status: 409 });
   const rider = await ensureRiderAvailable(riderId);
   order.riderId = rider._id as any;
@@ -615,7 +731,10 @@ export async function deliveryPickup(orderId: string, by?: string) {
       new Error("Order must be assigned to a rider first"),
       { status: 409 }
     );
-  if (order.status !== "Ready")
+  const readyForHandoff =
+    order.status === "Ready" ||
+    (order.status === "Served" && !order.pickedUpAt);
+  if (!readyForHandoff)
     throw Object.assign(
       new Error("Food isn't ready for pickup yet"),
       { status: 409 }
@@ -758,6 +877,14 @@ export async function transitionOrder(
 ) {
   const order = await Order.findById(id);
   if (!order) throw Object.assign(new Error("Not found"), { status: 404 });
+  if (to === "Served" && order.channel === "Delivery") {
+    throw Object.assign(
+      new Error(
+        "Delivery: food stays at Ready until a rider is assigned and taps Pick up on the Delivery page — do not mark Served from the kitchen."
+      ),
+      { status: 409 }
+    );
+  }
   const now = new Date();
   order.status = to;
   if (to === "In Progress" && !order.acceptedAt) {
@@ -765,9 +892,21 @@ export async function transitionOrder(
     const etaMin = Number(opts?.etaMinutes);
     if (etaMin && etaMin > 0 && etaMin < 240) {
       order.eta = new Date(now.getTime() + etaMin * 60 * 1000);
+      applyItemEta(order, order.eta, true);
+    }
+    for (const item of order.items as any[]) {
+      if (item.status === "Queued") item.status = "In Progress";
     }
   }
-  if (to === "Ready") order.readyAt = now;
+  if (to === "Ready") {
+    order.readyAt = now;
+    for (const item of order.items as any[]) {
+      if (item.status !== "Pending") {
+        item.status = "Ready";
+        item.eta = undefined;
+      }
+    }
+  }
   if (to === "Served") order.servedAt = now;
   if (to === "Completed") {
     order.closedAt = now;
