@@ -36,11 +36,11 @@ function check(name, cond, detail = "") {
 async function main() {
   console.log("\n=== Permissions + audit E2E ===\n");
 
-  const admin = (await login("admin@flavorflow.dev", "admin123")).token;
-  const manager = (await login("admin@flavorflow.dev", "admin123")).token; // no manager seeded; admin doubles up only if needed
-  const reception = (await login("hina@flavorflow.dev", "password")).token;
-  const waiter = (await login("bilal@flavorflow.dev", "password")).token;
-  const kitchen = (await login("kashif@flavorflow.dev", "password")).token;
+  const admin = (await login("admin@dinova.dev", "admin123")).token;
+  const manager = (await login("admin@dinova.dev", "admin123")).token; // no manager seeded; admin doubles up only if needed
+  const reception = (await login("hina@dinova.dev", "password")).token;
+  const waiter = (await login("bilal@dinova.dev", "password")).token;
+  const kitchen = (await login("kashif@dinova.dev", "password")).token;
 
   // ─── Menu route gates ───
   const menuPick = await j("GET", "/api/menu/items?active=true", admin);

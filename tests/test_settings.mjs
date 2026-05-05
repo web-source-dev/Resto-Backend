@@ -38,10 +38,10 @@ function check(name, cond, detail = "") {
   console.log("Settings page E2E");
   console.log("=".repeat(70));
 
-  const admin = await login("admin@flavorflow.dev", "admin123");
-  const manager = await login("manager@flavorflow.dev", "manager123");
-  const waiter = await login("waiter@flavorflow.dev", "waiter123");
-  const recept = await login("receptionist@flavorflow.dev", "recept123");
+  const admin = await login("admin@dinova.dev", "admin123");
+  const manager = await login("manager@dinova.dev", "manager123");
+  const waiter = await login("waiter@dinova.dev", "waiter123");
+  const recept = await login("receptionist@dinova.dev", "recept123");
   console.log("Logged in roles: admin, manager, receptionist, waiter");
 
   const outletId = admin.user.outletId;
@@ -55,7 +55,7 @@ function check(name, cond, detail = "") {
   const origName = before.name;
   const origRate = before.taxRate;
 
-  const newName = "FlavorFlow · Verified";
+  const newName = "Dinova · Verified";
   const newRate = 13.5;
   r = await j("PATCH", `/api/outlets/${outletId}`, admin.token, { name: newName, taxRate: newRate });
   check("PATCH outlet as admin 200", r.status === 200, `status=${r.status}`);

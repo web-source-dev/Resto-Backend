@@ -28,9 +28,9 @@ async function deliverOne(hook: any, event: WebhookEvent, payload: any) {
       timeout: env.WEBHOOK_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
-        "X-FlavorFlow-Event": event,
-        "X-FlavorFlow-Timestamp": ts,
-        "X-FlavorFlow-Signature": `t=${ts},v1=${sig}`,
+        "X-Dinova-Event": event,
+        "X-Dinova-Timestamp": ts,
+        "X-Dinova-Signature": `t=${ts},v1=${sig}`,
       },
       validateStatus: () => true,
     });
@@ -82,7 +82,7 @@ export async function testDeliver(hookId: string) {
   if (!hook) return { ok: false, error: "Not found" };
   return deliverOne(hook, "order.created", {
     test: true,
-    message: "This is a test delivery from FlavorFlow settings.",
+    message: "This is a test delivery from Dinova settings.",
     at: new Date().toISOString(),
   });
 }

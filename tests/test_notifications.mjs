@@ -60,10 +60,10 @@ async function main() {
   console.log("\n=== Notifications role-gate E2E ===\n");
 
   // 1. Login one user per role we need to assert against.
-  const admin = (await login("admin@flavorflow.dev", "admin123")).token;
-  const kitchen = (await login("kashif@flavorflow.dev", "password")).token;
-  const waiter = (await login("bilal@flavorflow.dev", "password")).token;
-  const rider = (await login("rider@flavorflow.dev", "password")).token;
+  const admin = (await login("admin@dinova.dev", "admin123")).token;
+  const kitchen = (await login("kashif@dinova.dev", "password")).token;
+  const waiter = (await login("bilal@dinova.dev", "password")).token;
+  const rider = (await login("rider@dinova.dev", "password")).token;
   console.log("Logged in: admin, kitchen, waiter, rider\n");
 
   // 2. Snapshot baseline unread count per role.

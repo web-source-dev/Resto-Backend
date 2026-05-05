@@ -167,20 +167,20 @@ r.post(
     const { to, subject } = req.body ?? {};
     if (id === "sms") {
       if (!to) return res.status(400).json({ error: "Provide a 'to' phone number" });
-      const result = await sendSms(to, "FlavorFlow test SMS · settings ping");
+      const result = await sendSms(to, "Dinova test SMS · settings ping");
       return res.json(result);
     }
     if (id === "whatsapp") {
       if (!to) return res.status(400).json({ error: "Provide a 'to' phone number" });
-      const result = await sendWhatsapp(to, "FlavorFlow test WhatsApp · settings ping");
+      const result = await sendWhatsapp(to, "Dinova test WhatsApp · settings ping");
       return res.json(result);
     }
     if (id === "email") {
       if (!to) return res.status(400).json({ error: "Provide a 'to' email" });
       const result = await sendEmail({
         to,
-        subject: subject ?? "FlavorFlow test email",
-        body: "This is a test email from your FlavorFlow settings page.",
+        subject: subject ?? "Dinova test email",
+        body: "This is a test email from your Dinova settings page.",
       });
       return res.json(result);
     }
@@ -243,7 +243,7 @@ r.post(
     });
     if (!printer) return res.status(404).json({ error: "Not found" });
     const outlet = await Outlet.findById(req.outletId);
-    const payload = buildTestTicket(outlet?.name ?? "FlavorFlow");
+    const payload = buildTestTicket(outlet?.name ?? "Dinova");
     const result = await escposPrint(printer.host, printer.port ?? 9100, payload);
     printer.lastTestAt = new Date();
     printer.lastTestOk = result.ok;
@@ -464,7 +464,7 @@ r.post(
       res.setHeader("Content-Type", "application/json");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="flavorflow-backup-${Date.now()}.json"`
+        `attachment; filename="dinova-backup-${Date.now()}.json"`
       );
       res.end(JSON.stringify({ createdAt: new Date(), ...payload }, null, 2));
     } catch (err: any) {

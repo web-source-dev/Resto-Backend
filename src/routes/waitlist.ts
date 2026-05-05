@@ -64,7 +64,7 @@ r.post(
       type: "system",
       level: "info",
       title: `SMS sent · ${w.customerName}`,
-      body: `"Your table at FlavorFlow is almost ready — party of ${w.party}"`,
+      body: `"Your table at Dinova is almost ready — party of ${w.party}"`,
       link: "/tables",
       targetRoles: ["admin", "manager", "receptionist", "waiter"],
     });

@@ -36,10 +36,10 @@ function check(name, cond, detail = "") {
 async function main() {
   console.log("\n=== Fixes #1–#5 E2E ===\n");
 
-  const admin = (await login("admin@flavorflow.dev", "admin123")).token;
-  const rider = (await login("rider@flavorflow.dev", "password")).token;
-  const reception = (await login("hina@flavorflow.dev", "password")).token;
-  const kitchen = (await login("kashif@flavorflow.dev", "password")).token;
+  const admin = (await login("admin@dinova.dev", "admin123")).token;
+  const rider = (await login("rider@dinova.dev", "password")).token;
+  const reception = (await login("hina@dinova.dev", "password")).token;
+  const kitchen = (await login("kashif@dinova.dev", "password")).token;
 
   // ────────────────────────────────────────────────────────────────────
   // #1 — Rider lockdown
@@ -170,7 +170,7 @@ async function main() {
   // Set up: find a Ready Delivery order, assign our rider, mark picked up,
   // then fail it. Rider should be free to claim again afterward.
   const allRiders = await j("GET", "/api/staff?role=rider", admin);
-  const riderId = (allRiders.data?.staff ?? []).find((u) => u.email === "rider@flavorflow.dev")?.id;
+  const riderId = (allRiders.data?.staff ?? []).find((u) => u.email === "rider@dinova.dev")?.id;
   // Find any Delivery order that's Ready or that we can drive to Ready
   const deliveries = await j("GET", "/api/orders?channel=Delivery&active=true&limit=50", admin);
   let target = (deliveries.data?.orders ?? []).find((o) => o.status === "Ready" && !o.riderId);

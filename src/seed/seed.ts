@@ -35,7 +35,7 @@ export async function maybeSeed() {
   console.log("[seed] populating initial data…");
 
   const outlet = await Outlet.create({
-    name: "FlavorFlow — Gulberg Outlet",
+    name: "Dinova — Gulberg Outlet",
     address: "M.M. Alam Road, Gulberg III, Lahore",
     phone: "+92 42 3577 8899",
     taxRate: 0.16,
@@ -46,7 +46,7 @@ export async function maybeSeed() {
   const admin = await User.create({
     outletId: outlet._id,
     name: "Gian Baio",
-    email: "admin@flavorflow.dev",
+    email: "admin@dinova.dev",
     passwordHash: adminPw,
     role: "admin",
     phone: "+92 300 0000001",
@@ -56,14 +56,14 @@ export async function maybeSeed() {
   });
 
   const staffSeed = [
-    { name: "Bilal Ahmed", email: "bilal@flavorflow.dev", role: "waiter", phone: "+92 333 1111111", shift: "Lunch · 11a–5p", rating: 4.8, hr: 350 },
-    { name: "Sana Iqbal", email: "sana@flavorflow.dev", role: "waiter", phone: "+92 333 2222222", shift: "Lunch · 11a–5p", rating: 4.6, hr: 320 },
-    { name: "Ali Raza", email: "ali@flavorflow.dev", role: "waiter", phone: "+92 333 3333333", shift: "Lunch · 11a–5p", rating: 4.3, hr: 300 },
-    { name: "Kashif Nawaz", email: "kashif@flavorflow.dev", role: "kitchen", phone: "+92 333 4444444", shift: "Full · 10a–10p", rating: 4.7, hr: 480 },
-    { name: "Faizan Aslam", email: "faizan@flavorflow.dev", role: "kitchen", phone: "+92 333 5555555", shift: "Full · 10a–10p", rating: 4.5, hr: 380 },
-    { name: "Hina Rasheed", email: "hina@flavorflow.dev", role: "receptionist", phone: "+92 333 6666666", shift: "Lunch · 11a–5p", rating: 4.9, hr: 340 },
-    // Uses the rider@flavorflow.dev email so ensureUsers refreshes it instead of duplicating.
-    { name: "Imran Shah", email: "rider@flavorflow.dev", role: "rider", phone: "+92 333 7777777", shift: "Peak · 5p–11p", rating: 4.4, hr: 280 },
+    { name: "Bilal Ahmed", email: "bilal@dinova.dev", role: "waiter", phone: "+92 333 1111111", shift: "Lunch · 11a–5p", rating: 4.8, hr: 350 },
+    { name: "Sana Iqbal", email: "sana@dinova.dev", role: "waiter", phone: "+92 333 2222222", shift: "Lunch · 11a–5p", rating: 4.6, hr: 320 },
+    { name: "Ali Raza", email: "ali@dinova.dev", role: "waiter", phone: "+92 333 3333333", shift: "Lunch · 11a–5p", rating: 4.3, hr: 300 },
+    { name: "Kashif Nawaz", email: "kashif@dinova.dev", role: "kitchen", phone: "+92 333 4444444", shift: "Full · 10a–10p", rating: 4.7, hr: 480 },
+    { name: "Faizan Aslam", email: "faizan@dinova.dev", role: "kitchen", phone: "+92 333 5555555", shift: "Full · 10a–10p", rating: 4.5, hr: 380 },
+    { name: "Hina Rasheed", email: "hina@dinova.dev", role: "receptionist", phone: "+92 333 6666666", shift: "Lunch · 11a–5p", rating: 4.9, hr: 340 },
+    // Uses the rider@dinova.dev email so ensureUsers refreshes it instead of duplicating.
+    { name: "Imran Shah", email: "rider@dinova.dev", role: "rider", phone: "+92 333 7777777", shift: "Peak · 5p–11p", rating: 4.4, hr: 280 },
   ];
   const defaultPw = await bcrypt.hash("password", 10);
   const staff: any[] = [];
@@ -801,7 +801,7 @@ export async function maybeSeed() {
       name: "Order ready (SMS)",
       channel: "SMS",
       event: "order.ready",
-      body: "Hey {{customerName}}, your FlavorFlow order {{orderCode}} is ready! 🎉",
+      body: "Hey {{customerName}}, your Dinova order {{orderCode}} is ready! 🎉",
       active: true,
     },
     {
@@ -809,7 +809,7 @@ export async function maybeSeed() {
       name: "Order delivered (WhatsApp)",
       channel: "WhatsApp",
       event: "order.delivered",
-      body: "{{customerName}}, your order {{orderCode}} has been delivered. Enjoy! Rate us: flavorflow.dev/r/{{orderCode}}",
+      body: "{{customerName}}, your order {{orderCode}} has been delivered. Enjoy! Rate us: dinova.dev/r/{{orderCode}}",
       active: true,
     },
     {
@@ -817,7 +817,7 @@ export async function maybeSeed() {
       name: "Digital receipt",
       channel: "Email",
       event: "order.confirmed",
-      subject: "Your FlavorFlow receipt · {{orderCode}}",
+      subject: "Your Dinova receipt · {{orderCode}}",
       body: "Thanks for dining with us, {{customerName}}.\n\nOrder {{orderCode}}\nTotal: {{total}}\n\nWe hope to see you soon.",
       active: true,
     },
@@ -826,7 +826,7 @@ export async function maybeSeed() {
       name: "Review ask",
       channel: "WhatsApp",
       event: "review.request",
-      body: "{{customerName}}, thanks for visiting FlavorFlow today! We'd love your feedback — just tap: flavorflow.dev/r/{{orderCode}} 🙏",
+      body: "{{customerName}}, thanks for visiting Dinova today! We'd love your feedback — just tap: dinova.dev/r/{{orderCode}} 🙏",
       active: true,
     },
   ]);
@@ -866,7 +866,7 @@ export async function maybeSeed() {
     },
   ]);
 
-  console.log("[seed] done. admin login: admin@flavorflow.dev / admin123");
+  console.log("[seed] done. admin login: admin@dinova.dev / admin123");
 }
 
 if (require.main === module) {

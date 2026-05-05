@@ -12,12 +12,12 @@ export const ROLE_TEST_USERS: {
   rating?: number;
   hourlyRate?: number;
 }[] = [
-  { email: "admin@flavorflow.dev", password: "admin123", name: "Gian Baio", role: "admin", rating: 4.9 },
-  { email: "manager@flavorflow.dev", password: "manager123", name: "Mr. Rehman", role: "manager", phone: "+92 300 1000001", shift: "Full · 10a–10p", rating: 4.8, hourlyRate: 650 },
-  { email: "receptionist@flavorflow.dev", password: "recept123", name: "Hina Rasheed", role: "receptionist", phone: "+92 333 6666666", shift: "Lunch · 11a–5p", rating: 4.9, hourlyRate: 340 },
-  { email: "waiter@flavorflow.dev", password: "waiter123", name: "Bilal Ahmed", role: "waiter", phone: "+92 333 1111111", shift: "Lunch · 11a–5p", rating: 4.8, hourlyRate: 350 },
-  { email: "kitchen@flavorflow.dev", password: "kitchen123", name: "Kashif Nawaz", role: "kitchen", phone: "+92 333 4444444", shift: "Full · 10a–10p", rating: 4.7, hourlyRate: 480 },
-  { email: "rider@flavorflow.dev", password: "rider123", name: "Imran Shah", role: "rider", phone: "+92 333 7777777", shift: "Peak · 5p–11p", rating: 4.4, hourlyRate: 280 },
+  { email: "admin@dinova.dev", password: "admin123", name: "Gian Baio", role: "admin", rating: 4.9 },
+  { email: "manager@dinova.dev", password: "manager123", name: "Mr. Rehman", role: "manager", phone: "+92 300 1000001", shift: "Full · 10a–10p", rating: 4.8, hourlyRate: 650 },
+  { email: "receptionist@dinova.dev", password: "recept123", name: "Hina Rasheed", role: "receptionist", phone: "+92 333 6666666", shift: "Lunch · 11a–5p", rating: 4.9, hourlyRate: 340 },
+  { email: "waiter@dinova.dev", password: "waiter123", name: "Bilal Ahmed", role: "waiter", phone: "+92 333 1111111", shift: "Lunch · 11a–5p", rating: 4.8, hourlyRate: 350 },
+  { email: "kitchen@dinova.dev", password: "kitchen123", name: "Kashif Nawaz", role: "kitchen", phone: "+92 333 4444444", shift: "Full · 10a–10p", rating: 4.7, hourlyRate: 480 },
+  { email: "rider@dinova.dev", password: "rider123", name: "Imran Shah", role: "rider", phone: "+92 333 7777777", shift: "Peak · 5p–11p", rating: 4.4, hourlyRate: 280 },
 ];
 
 export async function ensureTestUsers() {

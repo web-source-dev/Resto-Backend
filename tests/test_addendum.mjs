@@ -37,10 +37,10 @@ async function main() {
   console.log("\n=== Addendum / cancel / reopen E2E ===\n");
 
   // Logins for the role permutations we need.
-  const admin = (await login("admin@flavorflow.dev", "admin123")).token;
-  const reception = (await login("hina@flavorflow.dev", "password")).token;
-  const waiter = (await login("bilal@flavorflow.dev", "password")).token;
-  const kitchen = (await login("kashif@flavorflow.dev", "password")).token;
+  const admin = (await login("admin@dinova.dev", "admin123")).token;
+  const reception = (await login("hina@dinova.dev", "password")).token;
+  const waiter = (await login("bilal@dinova.dev", "password")).token;
+  const kitchen = (await login("kashif@dinova.dev", "password")).token;
 
   // Pick two menu items to add. Filter to active items so we don't get a
   // disabled one with no recipe stock available.

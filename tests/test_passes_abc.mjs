@@ -33,8 +33,8 @@ function check(name, cond, detail = "") {
 
 async function main() {
   console.log("\n=== Passes A–C E2E ===\n");
-  const admin = (await login("admin@flavorflow.dev", "admin123")).token;
-  const waiter = (await login("bilal@flavorflow.dev", "password")).token;
+  const admin = (await login("admin@dinova.dev", "admin123")).token;
+  const waiter = (await login("bilal@dinova.dev", "password")).token;
 
   // ──────────────────────────────────────────────
   // PASS A

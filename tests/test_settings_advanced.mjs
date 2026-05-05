@@ -29,9 +29,9 @@ function check(name, cond, detail = "") {
   console.log("Advanced settings E2E");
   console.log("═".repeat(70));
 
-  const admin = await login("admin@flavorflow.dev", "admin123");
-  const manager = await login("manager@flavorflow.dev", "manager123");
-  const waiter = await login("waiter@flavorflow.dev", "waiter123");
+  const admin = await login("admin@dinova.dev", "admin123");
+  const manager = await login("manager@dinova.dev", "manager123");
+  const waiter = await login("waiter@dinova.dev", "waiter123");
   console.log("Logged in as admin, manager, waiter");
 
   const oid = admin.user.outletId;
@@ -190,7 +190,7 @@ function check(name, cond, detail = "") {
   console.log("\n── Receipt + security policy ─────────────");
   r = await j("PATCH", `/api/outlets/${oid}`, admin.token, {
     receiptHeader: "Welcome!",
-    receiptFooter: "Thank you · follow @flavorflow",
+    receiptFooter: "Thank you · follow @dinova",
     receiptShowLogo: true,
     receiptShowTaxBreakdown: true,
     qrBrandColor: "#ef4444",

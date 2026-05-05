@@ -26,7 +26,7 @@ async function main() {
   const login = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "admin@flavorflow.dev", password: "admin123" }),
+    body: JSON.stringify({ email: "admin@dinova.dev", password: "admin123" }),
   }).then((r) => r.json());
   const token = login.token;
   if (!token) throw new Error("admin login failed — re-seed first?");

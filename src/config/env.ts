@@ -37,7 +37,7 @@ export const env = {
 
   VAPID_PUBLIC_KEY: str(process.env.VAPID_PUBLIC_KEY),
   VAPID_PRIVATE_KEY: str(process.env.VAPID_PRIVATE_KEY),
-  VAPID_SUBJECT: str(process.env.VAPID_SUBJECT) ?? "mailto:admin@flavorflow.local",
+  VAPID_SUBJECT: str(process.env.VAPID_SUBJECT) ?? "mailto:admin@dinova.local",
 };
 
 export type Env = typeof env;
